@@ -1,0 +1,18 @@
+{
+  "grafana": {
+    "region": "eu1",
+    "folders": []
+  },
+  "coralogix": {
+    "region": "eu1",
+    "folderId": "",
+    "isLocked": false
+  },
+  "migration": {
+    "checkpointFile": "migration-checkpoint.json",
+    "reportFile": "migration-report.txt",
+    "backupFile": "grafana-backup.zip",
+    "maxRetries": 5,
+    "initialRetryDelaySeconds": 2
+  }
+}

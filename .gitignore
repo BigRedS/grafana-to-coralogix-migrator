@@ -1,0 +1,66 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node
+node_modules/
+dist/
+build/
+coverage/
+.npm
+.yarn/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# Env (keep .env.example)
+.env
+.env.*
+!.env.example
+
+# Misc / temp
+*.tmp
+*.temp
+*.bak
+.cache/
+tmp/
+temp/
+custom_dashboards/
+grafana_dashboards/
+grafana_test_dashboards/
+spec
+grafana-backup/
+test_data/
+migration-checkpoint.json
+migration-report.txt
+grafana-backup.zip
+WIDGET_TYPE_COVERAGE.md
+WIDGET_TYPE_VALIDATION_REPORT.md
+cx-folder-delete-backup-*.zip
+cx-folder-delete-backup-*/
+
+# .NET build artifacts
+**/bin/
+**/obj/
+publish/
+artifacts/
