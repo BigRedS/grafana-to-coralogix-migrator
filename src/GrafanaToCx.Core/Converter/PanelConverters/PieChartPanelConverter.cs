@@ -1,3 +1,4 @@
+using GrafanaToCx.Core.Converter.Transformations;
 using Newtonsoft.Json.Linq;
 
 namespace GrafanaToCx.Core.Converter.PanelConverters;
@@ -10,10 +11,12 @@ namespace GrafanaToCx.Core.Converter.PanelConverters;
 ///
 /// Multi-target Elasticsearch panels use the first target's Lucene query;
 /// the shared groupBy field preserves the grouping dimension.
+/// When a transformation plan provides ConsolidatedQueryPayload (e.g. from
+/// PieMultiQueryConsolidationPlanner), that payload is used instead.
 /// </summary>
 public sealed class PieChartPanelConverter : IPanelConverter
 {
-    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics)
+    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
         var targets = panel["targets"] as JArray;
         if (targets == null || targets.Count == 0)
@@ -27,9 +30,17 @@ public sealed class PieChartPanelConverter : IPanelConverter
         var grafanaUnit = panel["fieldConfig"]?["defaults"]?["unit"]?.ToString() ?? "none";
         var legendOptions = panel["options"]?["legend"] as JObject ?? new JObject();
 
-        var pieQuery = IsElasticsearchTarget(target)
-            ? BuildLogsQuery(target)
-            : BuildMetricsQuery(target, discoveredMetrics);
+        JObject pieQuery;
+        if (plan is TransformationPlan.Success success && success.ConsolidatedQueryPayload != null)
+        {
+            pieQuery = success.ConsolidatedQueryPayload;
+        }
+        else
+        {
+            pieQuery = IsElasticsearchTarget(target)
+                ? BuildLogsQuery(target)
+                : BuildMetricsQuery(target, discoveredMetrics);
+        }
 
         return new JObject
         {

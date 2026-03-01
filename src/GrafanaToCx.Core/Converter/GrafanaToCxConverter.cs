@@ -1,4 +1,5 @@
 using GrafanaToCx.Core.Converter.PanelConverters;
+using GrafanaToCx.Core.Converter.Transformations;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -37,6 +38,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     private readonly PieChartPanelConverter _pieChartConverter = new();
     private readonly BarChartPanelConverter _barChartConverter = new();
     private readonly DataTablePanelConverter _dataTableConverter = new();
+    private readonly CompositeTransformationPlanner _transformationPlanner = new();
     private readonly List<PanelConversionDiagnostic> _conversionDiagnostics = [];
 
     public IReadOnlyList<PanelConversionDiagnostic> ConversionDiagnostics => _conversionDiagnostics;
@@ -247,15 +249,29 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         var panelType = panel.Value<string>("type") ?? string.Empty;
         var panelTitle = panel.Value<string>("title") is { Length: > 0 } t ? t : $"Panel #{panel.Value<int>("id")}";
 
+        var targets = panel["targets"] as JArray ?? new JArray();
+        var transformations = TransformationContext.GetTransformations(panel);
+        var plan = _transformationPlanner.Plan(new TransformationContext(panel, targets, transformations));
+
+        if (plan is TransformationPlan.Failure failure)
+        {
+            _conversionDiagnostics.Add(new PanelConversionDiagnostic(
+                panelTitle,
+                panelType,
+                "error",
+                failure.Reason));
+            return MarkdownPanelConverter.CreateErrorWidget(panelTitle, panelType, failure.Reason);
+        }
+
         JObject? widget = panelType switch
         {
-            "stat" or "singlestat" or "gauge" or "bargauge" => _gaugeConverter.Convert(panel, discoveredMetrics),
-            "text" => _markdownConverter.Convert(panel, discoveredMetrics),
-            "table" => _dataTableConverter.Convert(panel, discoveredMetrics),
-            "logs" => _logsPanelConverter.Convert(panel, discoveredMetrics),
-            "piechart" => _pieChartConverter.Convert(panel, discoveredMetrics),
-            "barchart" => _barChartConverter.Convert(panel, discoveredMetrics),
-            "timeseries" or "graph" => _lineChartConverter.Convert(panel, discoveredMetrics),
+            "stat" or "singlestat" or "gauge" or "bargauge" => _gaugeConverter.Convert(panel, discoveredMetrics, plan),
+            "text" => _markdownConverter.Convert(panel, discoveredMetrics, plan),
+            "table" => _dataTableConverter.Convert(panel, discoveredMetrics, plan),
+            "logs" => _logsPanelConverter.Convert(panel, discoveredMetrics, plan),
+            "piechart" => _pieChartConverter.Convert(panel, discoveredMetrics, plan),
+            "barchart" => _barChartConverter.Convert(panel, discoveredMetrics, plan),
+            "timeseries" or "graph" => _lineChartConverter.Convert(panel, discoveredMetrics, plan),
             _ => null
         };
 
@@ -293,7 +309,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
             return null;
         }
 
-        widget = _lineChartConverter.Convert(panel, discoveredMetrics);
+        widget = _lineChartConverter.Convert(panel, discoveredMetrics, plan);
         if (widget != null)
         {
             _conversionDiagnostics.Add(new PanelConversionDiagnostic(

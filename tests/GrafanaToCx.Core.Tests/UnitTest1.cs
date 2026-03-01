@@ -149,6 +149,47 @@ public class UnitTest1
         Assert.True(DashboardComparator.HasValidQuery(barWidget, "barChart"));
     }
 
+    [Fact]
+    public void Comparator_RecognizesDataPrimeQueries_ForPieAndBar()
+    {
+        var pieWidget = new JObject
+        {
+            ["definition"] = new JObject
+            {
+                ["pieChart"] = new JObject
+                {
+                    ["query"] = new JObject
+                    {
+                        ["dataPrime"] = new JObject
+                        {
+                            ["value"] = "source logs | groupby payload.isEmail agg count()"
+                        }
+                    }
+                }
+            }
+        };
+
+        var barWidget = new JObject
+        {
+            ["definition"] = new JObject
+            {
+                ["barChart"] = new JObject
+                {
+                    ["query"] = new JObject
+                    {
+                        ["dataPrime"] = new JObject
+                        {
+                            ["value"] = "source logs | groupby level agg count()"
+                        }
+                    }
+                }
+            }
+        };
+
+        Assert.True(DashboardComparator.HasValidQuery(pieWidget, "pieChart"));
+        Assert.True(DashboardComparator.HasValidQuery(barWidget, "barChart"));
+    }
+
     private static GrafanaToCxConverter CreateConverter() =>
         new(NullLogger<GrafanaToCxConverter>.Instance);
 

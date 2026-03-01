@@ -226,13 +226,13 @@ public static class DashboardComparator
     {
         var query = definition["pieChart"]?["query"] as JObject;
         if (query == null) return false;
-        return query["logs"] is JObject || query["metrics"] is JObject;
+        return query["logs"] is JObject || query["metrics"] is JObject || query["dataPrime"] is JObject;
     }
 
     private static bool CheckBarChartQuery(JObject definition)
     {
         var query = definition["barChart"]?["query"] as JObject;
         if (query == null) return false;
-        return query["logs"] is JObject || query["metrics"] is JObject;
+        return query["logs"] is JObject || query["metrics"] is JObject || query["dataPrime"] is JObject;
     }
 }

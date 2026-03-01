@@ -1,3 +1,4 @@
+using GrafanaToCx.Core.Converter.Transformations;
 using Newtonsoft.Json.Linq;
 
 namespace GrafanaToCx.Core.Converter.PanelConverters;
@@ -21,7 +22,7 @@ public sealed class LogsPanelConverter : IPanelConverter
         "coralogix.metadata.subsystemName"
     ];
 
-    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics)
+    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
         var targets = panel["targets"] as JArray;
         if (targets == null || targets.Count == 0)

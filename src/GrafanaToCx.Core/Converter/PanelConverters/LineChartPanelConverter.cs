@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using GrafanaToCx.Core.Converter;
+using GrafanaToCx.Core.Converter.Transformations;
 using Newtonsoft.Json.Linq;
 
 namespace GrafanaToCx.Core.Converter.PanelConverters;
@@ -15,7 +16,7 @@ public sealed class LineChartPanelConverter : IPanelConverter
         new(@"\b(bytes_rate|bytes_over_time|absent_over_time|count_over_time|rate|avg_over_time|min_over_time|max_over_time|first_over_time|last_over_time|quantile_over_time)\s*\(",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics)
+    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
         var targets = panel["targets"] as JArray;
         if (targets == null || targets.Count == 0)
