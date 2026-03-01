@@ -40,10 +40,10 @@ public class TransformationPlannerTests
 
         var query = widget["definition"]?["pieChart"]?["query"] as JObject;
         Assert.NotNull(query);
-        Assert.NotNull(query["logs"]);
-        Assert.NotNull(query["dataPrime"]);
+        Assert.Null(query["logs"]);
+        Assert.NotNull(query["dataprime"]);
 
-        var dataPrime = query["dataPrime"]?["value"]?.ToString();
+        var dataPrime = query["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
         Assert.NotNull(dataPrime);
         Assert.Contains("source logs", dataPrime);
         Assert.Contains("groupby payload.isEmail agg count()", dataPrime);
@@ -81,7 +81,7 @@ public class TransformationPlannerTests
         var widget = GetFirstWidget(result);
         Assert.NotNull(widget);
 
-        var dataPrime = widget["definition"]?["pieChart"]?["query"]?["dataPrime"]?["value"]?.ToString();
+        var dataPrime = widget["definition"]?["pieChart"]?["query"]?["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
         Assert.NotNull(dataPrime);
         Assert.Contains("groupby payload.isEmail agg count()", dataPrime);
     }
@@ -118,10 +118,85 @@ public class TransformationPlannerTests
         var widget = GetFirstWidget(result);
         Assert.NotNull(widget);
 
-        var dataPrime = widget["definition"]?["pieChart"]?["query"]?["dataPrime"]?["value"]?.ToString();
+        var dataPrime = widget["definition"]?["pieChart"]?["query"]?["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
         Assert.NotNull(dataPrime);
         Assert.Contains("groupby payload.isEmail agg count()", dataPrime);
         Assert.Contains("app:foo", dataPrime);
+    }
+
+    [Fact]
+    public void PieChart_MultiTarget_TrailingPredicate_EscapesLuceneForDataPrimeLiteral()
+    {
+        var converter = CreateConverter();
+        var panel = new JObject
+        {
+            ["id"] = 12,
+            ["title"] = "Escaped Lucene Pie",
+            ["type"] = "piechart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = @"source:C:\logs AND user:'bob' AND payload.isEmail:true",
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["query"] = @"source:C:\logs AND user:'bob' AND payload.isEmail:false",
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var dataPrime = widget["definition"]?["pieChart"]?["query"]?["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
+        Assert.NotNull(dataPrime);
+        Assert.Contains("lucene 'source:C:\\\\logs AND user:\\'bob\\''", dataPrime);
+        Assert.Contains("groupby payload.isEmail agg count()", dataPrime);
+    }
+
+    [Fact]
+    public void PieChart_MultiTarget_SumMetric_UsesSumAggregationInDataPrime()
+    {
+        var converter = CreateConverter();
+        var panel = new JObject
+        {
+            ["id"] = 13,
+            ["title"] = "Sum Metric Pie",
+            ["type"] = "piechart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "app:foo AND payload.isEmail:true",
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "sum", ["field"] = "payload.size.keyword" } }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["query"] = "app:foo AND payload.isEmail:false",
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "sum", ["field"] = "payload.size.keyword" } }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var dataPrime = widget["definition"]?["pieChart"]?["query"]?["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
+        Assert.NotNull(dataPrime);
+        Assert.Contains("groupby payload.isEmail agg sum(payload.size)", dataPrime);
     }
 
     [Fact]
@@ -274,6 +349,7 @@ public class TransformationPlannerTests
         var query = widget["definition"]?["pieChart"]?["query"] as JObject;
         Assert.NotNull(query);
         Assert.NotNull(query["logs"]);
+        Assert.Null(query["dataprime"]);
         Assert.Null(query["dataPrime"]);
     }
 

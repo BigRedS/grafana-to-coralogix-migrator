@@ -160,9 +160,12 @@ public class UnitTest1
                 {
                     ["query"] = new JObject
                     {
-                        ["dataPrime"] = new JObject
+                        ["dataprime"] = new JObject
                         {
-                            ["value"] = "source logs | groupby payload.isEmail agg count()"
+                            ["dataprimeQuery"] = new JObject
+                            {
+                                ["text"] = "source logs | groupby payload.isEmail agg count()"
+                            }
                         }
                     }
                 }

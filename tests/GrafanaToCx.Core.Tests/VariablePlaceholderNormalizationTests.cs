@@ -89,6 +89,18 @@ public class VariablePlaceholderNormalizationTests
     }
 
     [Fact]
+    public void CleanQuery_PromQLRegexVariables_DropsQuotesAroundVariables()
+    {
+        var input = "rate(http_requests_total{pod=~\"$pod\", container!~\"${container}\"}[5m])";
+        var result = QueryHelpers.CleanQuery(input, new HashSet<string>());
+
+        Assert.Contains("pod=~${pod}", result);
+        Assert.Contains("container!~${container}", result);
+        Assert.DoesNotContain("=~\"${pod}\"", result);
+        Assert.DoesNotContain("!~\"${container}\"", result);
+    }
+
+    [Fact]
     public void DataTable_ES_LogsQuery_NormalizesPlaceholders()
     {
         var converter = CreateConverter();

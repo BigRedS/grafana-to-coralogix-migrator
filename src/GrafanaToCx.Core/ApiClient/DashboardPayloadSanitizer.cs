@@ -23,9 +23,88 @@ public static class DashboardPayloadSanitizer
     {
         var cloned = (JObject)dashboard.DeepClone();
         RemovePropertiesRecursively(cloned, PropertiesToRemove);
+        MigratePieChartDataPrimeQueries(cloned);
         EnsureDataTableColumns(cloned);
         EnsurePieChartLabelDefinition(cloned);
         return cloned;
+    }
+
+    /// <summary>
+    /// Coralogix upload API rejects pieChart.query.dataPrime. Preserve it by:
+    /// 1) removing unsupported dataPrime from pieChart.query
+    /// 2) injecting an adjacent markdown widget that keeps the DataPrime query text
+    /// </summary>
+    private static void MigratePieChartDataPrimeQueries(JToken token)
+    {
+        if (token is JObject obj)
+        {
+            foreach (var prop in obj.Properties())
+            {
+                if (prop.Name == "widgets" && prop.Value is JArray widgets)
+                {
+                    ProcessWidgetsArrayForDataPrime(widgets);
+                    continue;
+                }
+
+                MigratePieChartDataPrimeQueries(prop.Value);
+            }
+        }
+        else if (token is JArray array)
+        {
+            foreach (var item in array)
+            {
+                MigratePieChartDataPrimeQueries(item);
+            }
+        }
+    }
+
+    private static void ProcessWidgetsArrayForDataPrime(JArray widgets)
+    {
+        for (var i = 0; i < widgets.Count; i++)
+        {
+            if (widgets[i] is not JObject widget)
+                continue;
+
+            if (!TryExtractAndRemoveDataPrime(widget, out var dataPrimeQuery))
+                continue;
+
+            var title = widget["title"]?.ToString() ?? "Widget";
+            var markdownWidget = new JObject
+            {
+                ["id"] = new JObject { ["value"] = Guid.NewGuid().ToString() },
+                ["title"] = $"{title} (DataPrime Query)",
+                ["description"] = "Preserved from converter output: API does not accept pieChart.query.dataPrime directly.",
+                ["definition"] = new JObject
+                {
+                    ["markdown"] = new JObject
+                    {
+                        ["markdownText"] =
+                            "## DataPrime Query (Preserved)\n\n```dataprime\n" +
+                            dataPrimeQuery +
+                            "\n```"
+                    }
+                }
+            };
+
+            widgets.Insert(i + 1, markdownWidget);
+            i++;
+        }
+    }
+
+    private static bool TryExtractAndRemoveDataPrime(JObject widget, out string dataPrimeQuery)
+    {
+        dataPrimeQuery = string.Empty;
+
+        var query = widget["definition"]?["pieChart"]?["query"] as JObject;
+        var dataPrime = query?["dataPrime"] as JObject;
+        var value = dataPrime?["value"]?.ToString();
+
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        dataPrimeQuery = value;
+        query!.Property("dataPrime")?.Remove();
+        return true;
     }
 
     private static void RemovePropertiesRecursively(JToken token, string[] propertyNames)

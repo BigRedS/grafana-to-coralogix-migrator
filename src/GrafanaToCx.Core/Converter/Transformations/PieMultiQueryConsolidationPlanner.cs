@@ -139,29 +139,52 @@ public sealed class PieMultiQueryConsolidationPlanner : ITransformationPlanner
         return false;
     }
 
-    private static JObject BuildConsolidatedPayload(string baseLucene, string groupByField, JObject firstTarget)
+    private static JObject BuildConsolidatedPayload(string baseLucene, string groupByField, JObject target)
     {
         var luceneFilter = string.IsNullOrWhiteSpace(baseLucene) || baseLucene == "*"
             ? string.Empty
             : baseLucene;
 
+        var aggregation = BuildDataPrimeAggregation(target["metrics"] as JArray ?? new JArray());
         var dataPrimeQuery = string.IsNullOrWhiteSpace(luceneFilter)
-            ? $"source logs | groupby {groupByField} agg count()"
-            : $"source logs | lucene '{EscapeForDataPrimeLiteral(luceneFilter)}' | groupby {groupByField} agg count()";
+            ? $"source logs | groupby {groupByField} agg {aggregation}"
+            : $"source logs | lucene '{EscapeForDataPrimeLiteral(luceneFilter)}' | groupby {groupByField} agg {aggregation}";
 
-        var logsQuery = BuildLogsQuery(firstTarget, baseLucene, groupByField);
-        var dataPrimeObj = new JObject { ["value"] = dataPrimeQuery };
+        var dataPrimeObj = new JObject
+        {
+            ["dataprimeQuery"] = new JObject
+            {
+                ["text"] = dataPrimeQuery
+            },
+            ["filters"] = new JArray(),
+            ["groupNames"] = new JArray { groupByField }
+        };
 
         return new JObject
         {
-            ["logs"] = logsQuery,
-            ["dataPrime"] = dataPrimeObj
+            ["dataprime"] = dataPrimeObj
         };
     }
 
     private static string EscapeForDataPrimeLiteral(string lucene)
     {
         return lucene.Replace("\\", "\\\\").Replace("'", "\\'");
+    }
+
+    private static string BuildDataPrimeAggregation(JArray metrics)
+    {
+        var first = metrics?.Children<JObject>().FirstOrDefault();
+        var type = first?.Value<string>("type")?.ToLowerInvariant();
+        var field = PanelConverters.CxFieldHelper.StripLogsFieldSuffixes(first?.Value<string>("field") ?? string.Empty);
+
+        return type switch
+        {
+            "sum" when !string.IsNullOrWhiteSpace(field) => $"sum({field})",
+            "avg" when !string.IsNullOrWhiteSpace(field) => $"avg({field})",
+            "min" when !string.IsNullOrWhiteSpace(field) => $"min({field})",
+            "max" when !string.IsNullOrWhiteSpace(field) => $"max({field})",
+            _ => "count()"
+        };
     }
 
     private static JObject BuildLogsQuery(JObject target, string baseLucene, string groupByField)

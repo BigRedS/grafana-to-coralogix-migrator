@@ -33,7 +33,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
         JObject pieQuery;
         if (plan is TransformationPlan.Success success && success.ConsolidatedQueryPayload != null)
         {
-            pieQuery = success.ConsolidatedQueryPayload;
+            pieQuery = NormalizeConsolidatedQueryPayload(success.ConsolidatedQueryPayload);
         }
         else
         {
@@ -147,5 +147,49 @@ public sealed class PieChartPanelConverter : IPanelConverter
             return true;
 
         return target["bucketAggs"] != null && target["expr"] == null;
+    }
+
+    /// <summary>
+    /// Converts legacy consolidated payload shape:
+    /// { logs: {...}, dataPrime: { value: "..." } }
+    /// into API-supported DataPrime shape:
+    /// { logs: {...}, dataprime: { dataprimeQuery: { text: "..." }, filters: [], groupNames: [...] } }
+    /// </summary>
+    private static JObject NormalizeConsolidatedQueryPayload(JObject payload)
+    {
+        var normalized = (JObject)payload.DeepClone();
+
+        var dataPrimeValue = normalized["dataPrime"]?["value"]?.ToString();
+        if (string.IsNullOrWhiteSpace(dataPrimeValue))
+            return normalized;
+
+        var groupNames = new JArray();
+        var groupNamesFields = normalized["logs"]?["groupNamesFields"] as JArray;
+        if (groupNamesFields != null)
+        {
+            foreach (var field in groupNamesFields.Children<JObject>())
+            {
+                var keypath = field["keypath"] as JArray;
+                if (keypath == null || keypath.Count == 0)
+                    continue;
+                groupNames.Add(string.Join(".", keypath.Select(k => k.ToString())));
+            }
+        }
+
+        var dataprime = new JObject
+        {
+            ["dataprimeQuery"] = new JObject
+            {
+                ["text"] = dataPrimeValue
+            },
+            ["filters"] = new JArray(),
+            ["groupNames"] = groupNames
+        };
+        
+        // PieChart.query uses oneof semantics in API contract; keep only dataprime.
+        return new JObject
+        {
+            ["dataprime"] = dataprime
+        };
     }
 }

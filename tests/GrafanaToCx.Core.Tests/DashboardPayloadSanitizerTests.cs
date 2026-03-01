@@ -395,4 +395,181 @@ public class DashboardPayloadSanitizerTests
         Assert.Equal("LABEL_SOURCE_INNER", labelDefinition1["labelSource"]?.ToString());
         Assert.Equal("LABEL_SOURCE_INNER", labelDefinition2["labelSource"]?.ToString());
     }
+
+    [Fact]
+    public void Sanitize_MigratesPieChartDataPrime_ToAdjacentMarkdownWidget()
+    {
+        var dashboard = new JObject
+        {
+            ["layout"] = new JObject
+            {
+                ["sections"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["rows"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["widgets"] = new JArray
+                                {
+                                    new JObject
+                                    {
+                                        ["id"] = new JObject { ["value"] = "pie-1" },
+                                        ["title"] = "Pie With DataPrime",
+                                        ["definition"] = new JObject
+                                        {
+                                            ["pieChart"] = new JObject
+                                            {
+                                                ["query"] = new JObject
+                                                {
+                                                    ["logs"] = new JObject
+                                                    {
+                                                        ["aggregation"] = new JObject { ["count"] = new JObject() },
+                                                        ["filters"] = new JArray(),
+                                                        ["groupNamesFields"] = new JArray()
+                                                    },
+                                                    ["dataPrime"] = new JObject
+                                                    {
+                                                        ["value"] = "source logs | groupby payload.isEmail agg count()"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = DashboardPayloadSanitizer.Sanitize(dashboard);
+
+        var widgets = result["layout"]?["sections"]?[0]?["rows"]?[0]?["widgets"] as JArray;
+        Assert.NotNull(widgets);
+        Assert.Equal(2, widgets.Count);
+
+        var pieWidget = widgets[0] as JObject;
+        Assert.NotNull(pieWidget);
+        Assert.Null(pieWidget["definition"]?["pieChart"]?["query"]?["dataPrime"]);
+
+        var markdownWidget = widgets[1] as JObject;
+        Assert.NotNull(markdownWidget);
+        Assert.Equal("Pie With DataPrime (DataPrime Query)", markdownWidget["title"]?.ToString());
+        var markdownText = markdownWidget["definition"]?["markdown"]?["markdownText"]?.ToString();
+        Assert.NotNull(markdownText);
+        Assert.Contains("source logs | groupby payload.isEmail agg count()", markdownText);
+    }
+
+    [Fact]
+    public void Sanitize_LegacyDataPrimeMigration_IsIdempotent()
+    {
+        var dashboard = new JObject
+        {
+            ["layout"] = new JObject
+            {
+                ["sections"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["rows"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["widgets"] = new JArray
+                                {
+                                    new JObject
+                                    {
+                                        ["id"] = new JObject { ["value"] = "pie-2" },
+                                        ["title"] = "Pie Legacy DataPrime",
+                                        ["definition"] = new JObject
+                                        {
+                                            ["pieChart"] = new JObject
+                                            {
+                                                ["query"] = new JObject
+                                                {
+                                                    ["dataPrime"] = new JObject
+                                                    {
+                                                        ["value"] = "source logs | groupby payload.isEmail agg count()"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        var first = DashboardPayloadSanitizer.Sanitize(dashboard);
+        var second = DashboardPayloadSanitizer.Sanitize(first);
+
+        var widgets = second["layout"]?["sections"]?[0]?["rows"]?[0]?["widgets"] as JArray;
+        Assert.NotNull(widgets);
+        Assert.Equal(2, widgets.Count);
+        Assert.Null(widgets[0]?["definition"]?["pieChart"]?["query"]?["dataPrime"]);
+        Assert.Equal("Pie Legacy DataPrime (DataPrime Query)", widgets[1]?["title"]?.ToString());
+    }
+
+    [Fact]
+    public void Sanitize_DoesNotMigrateModernDataprimeShape()
+    {
+        var dashboard = new JObject
+        {
+            ["layout"] = new JObject
+            {
+                ["sections"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["rows"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["widgets"] = new JArray
+                                {
+                                    new JObject
+                                    {
+                                        ["id"] = new JObject { ["value"] = "pie-3" },
+                                        ["title"] = "Pie Modern Dataprime",
+                                        ["definition"] = new JObject
+                                        {
+                                            ["pieChart"] = new JObject
+                                            {
+                                                ["query"] = new JObject
+                                                {
+                                                    ["dataprime"] = new JObject
+                                                    {
+                                                        ["dataprimeQuery"] = new JObject
+                                                        {
+                                                            ["text"] = "source logs | groupby payload.isEmail agg count()"
+                                                        },
+                                                        ["filters"] = new JArray(),
+                                                        ["groupNames"] = new JArray { "payload.isEmail" }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        var result = DashboardPayloadSanitizer.Sanitize(dashboard);
+
+        var widgets = result["layout"]?["sections"]?[0]?["rows"]?[0]?["widgets"] as JArray;
+        Assert.NotNull(widgets);
+        Assert.Single(widgets);
+        Assert.NotNull(widgets[0]?["definition"]?["pieChart"]?["query"]?["dataprime"]);
+        Assert.Null(widgets[0]?["definition"]?["pieChart"]?["query"]?["dataPrime"]);
+    }
 }
