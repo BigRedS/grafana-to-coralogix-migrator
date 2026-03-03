@@ -193,7 +193,7 @@ public sealed class MigrationOrchestrator
                 var existingId = FindExistingCxId(entry, converted, options.FolderId);
                 if (existingId is not null)
                 {
-                    await ReplaceExistingDashboardAsync(entry, converted, existingId, ct);
+                    await ReplaceExistingDashboardAsync(entry, converted, existingId, options.FolderId, ct);
                     return;
                 }
 
@@ -201,20 +201,7 @@ public sealed class MigrationOrchestrator
                     "Dashboard '{Title}' not found in CX — creating new.", entry.GrafanaTitle);
             }
 
-            var uploadResult = await _cxClient.UploadDashboardAsync(converted, _settings.Coralogix.IsLocked, options.FolderId, ct);
-
-            if (uploadResult.Success && uploadResult.DashboardId is not null)
-            {
-                entry.Status = CheckpointStatus.Completed;
-                entry.CxDashboardId = uploadResult.DashboardId;
-                entry.ErrorMessage = null;
-                entry.NextRetryAt = null;
-                _logger.LogInformation("Dashboard '{Title}' migrated — CX ID: {CxId}.",
-                    entry.GrafanaTitle, uploadResult.DashboardId);
-                return;
-            }
-
-            ApplyUploadFailure(entry, uploadResult);
+            await UploadDashboardAsync(entry, converted, options.FolderId, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -251,6 +238,7 @@ public sealed class MigrationOrchestrator
         CheckpointEntry entry,
         JObject converted,
         string existingId,
+        string? folderId,
         CancellationToken ct)
     {
         var dashboardWithId = (JObject)converted.DeepClone();
@@ -269,8 +257,51 @@ public sealed class MigrationOrchestrator
         }
         else
         {
-            MarkFailed(entry, CheckpointStatus.FailedCritical, "ReplaceDashboardAsync returned false.");
+            _logger.LogWarning(
+                "Replace failed for dashboard '{Title}' ({Uid}) using CX ID '{CxId}'. Starting fallback create via upload.",
+                entry.GrafanaTitle,
+                entry.GrafanaUid,
+                existingId);
+            await UploadDashboardAsync(entry, converted, folderId, ct, isFallbackFromReplace: true, replaceTargetId: existingId);
         }
+    }
+
+    private async Task UploadDashboardAsync(
+        CheckpointEntry entry,
+        JObject converted,
+        string? folderId,
+        CancellationToken ct,
+        bool isFallbackFromReplace = false,
+        string? replaceTargetId = null)
+    {
+        var uploadResult = await _cxClient.UploadDashboardAsync(converted, _settings.Coralogix.IsLocked, folderId, ct);
+
+        if (uploadResult.Success && uploadResult.DashboardId is not null)
+        {
+            entry.Status = CheckpointStatus.Completed;
+            entry.CxDashboardId = uploadResult.DashboardId;
+            entry.ErrorMessage = null;
+            entry.NextRetryAt = null;
+
+            if (isFallbackFromReplace)
+            {
+                _logger.LogInformation(
+                    "Fallback create succeeded for dashboard '{Title}' ({Uid}) after replace target '{CxId}' failed. New CX ID: {NewCxId}.",
+                    entry.GrafanaTitle,
+                    entry.GrafanaUid,
+                    replaceTargetId,
+                    uploadResult.DashboardId);
+            }
+            else
+            {
+                _logger.LogInformation("Dashboard '{Title}' migrated — CX ID: {CxId}.",
+                    entry.GrafanaTitle, uploadResult.DashboardId);
+            }
+
+            return;
+        }
+
+        ApplyUploadFailure(entry, uploadResult);
     }
 
     private void ApplyUploadFailure(CheckpointEntry entry, DashboardUploadResult uploadResult)

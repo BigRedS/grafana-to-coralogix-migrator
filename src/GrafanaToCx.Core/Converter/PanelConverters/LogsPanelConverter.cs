@@ -12,6 +12,13 @@ namespace GrafanaToCx.Core.Converter.PanelConverters;
 /// </summary>
 public sealed class LogsPanelConverter : IPanelConverter
 {
+    private readonly ILogqlToLuceneTranslator _logqlTranslator;
+
+    public LogsPanelConverter(ILogqlToLuceneTranslator? logqlTranslator = null)
+    {
+        _logqlTranslator = logqlTranslator ?? new LogqlToLuceneTranslator();
+    }
+
     // Standard CX log columns mirroring Grafana's default logs panel fields.
     private static readonly string[] DefaultColumns =
     [
@@ -24,16 +31,11 @@ public sealed class LogsPanelConverter : IPanelConverter
 
     public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
-        var targets = panel["targets"] as JArray;
-        if (targets == null || targets.Count == 0)
+        var targets = PanelTargetSelector.ResolveVisibleTargets(panel, plan);
+        if (targets.Count == 0)
             return null;
 
-        var target = targets
-            .Children<JObject>()
-            .FirstOrDefault(t => t.Value<bool?>("hide") != true);
-
-        if (target == null)
-            return null;
+        var target = targets[0];
 
         var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(ExtractLuceneQuery(target));
         var columns = BuildColumns(luceneQuery);
@@ -71,7 +73,7 @@ public sealed class LogsPanelConverter : IPanelConverter
         };
     }
 
-    private static string ExtractLuceneQuery(JObject target)
+    private string ExtractLuceneQuery(JObject target)
     {
         // Elasticsearch / OpenSearch datasource: query field is already Lucene.
         var dsType = target["datasource"]?["type"]?.ToString();
@@ -83,7 +85,7 @@ public sealed class LogsPanelConverter : IPanelConverter
 
         // Loki datasource: translate LogQL expr to Lucene.
         var expr = target.Value<string>("expr") ?? string.Empty;
-        return string.IsNullOrWhiteSpace(expr) ? string.Empty : LogqlToLuceneConverter.Convert(expr);
+        return string.IsNullOrWhiteSpace(expr) ? string.Empty : _logqlTranslator.Convert(expr);
     }
 
     private static JArray BuildColumns(string luceneQuery)

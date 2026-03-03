@@ -17,6 +17,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     {
         "timeseries", "graph"
     };
+    private const string StatusHistoryPanelType = "status-history";
 
     private static readonly string[] SectionColors =
     [
@@ -38,14 +39,19 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     private readonly PieChartPanelConverter _pieChartConverter = new();
     private readonly BarChartPanelConverter _barChartConverter = new();
     private readonly DataTablePanelConverter _dataTableConverter = new();
-    private readonly CompositeTransformationPlanner _transformationPlanner = new();
+    private readonly CompositeTransformationPlanner _transformationPlanner;
     private readonly List<PanelConversionDiagnostic> _conversionDiagnostics = [];
+    private readonly List<JObject> _conversionDecisionEvents = [];
 
     public IReadOnlyList<PanelConversionDiagnostic> ConversionDiagnostics => _conversionDiagnostics;
+    public IReadOnlyList<JObject> ConversionDecisionEvents => _conversionDecisionEvents;
 
-    public GrafanaToCxConverter(ILogger<GrafanaToCxConverter> logger)
+    public GrafanaToCxConverter(
+        ILogger<GrafanaToCxConverter> logger,
+        MultiLuceneMergeOptions? mergeOptions = null)
     {
         _logger = logger;
+        _transformationPlanner = new CompositeTransformationPlanner(mergeOptions ?? MultiLuceneMergeOptions.Disabled);
     }
 
     public string Convert(string grafanaJson, ConversionOptions? options = null)
@@ -57,6 +63,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     public JObject ConvertToJObject(string grafanaJson, ConversionOptions? options = null)
     {
         _conversionDiagnostics.Clear();
+        _conversionDecisionEvents.Clear();
         var sourceToken = JToken.Parse(grafanaJson);
         var sourceObject = sourceToken as JObject ?? new JObject();
         var grafana = sourceObject["dashboard"] as JObject ?? sourceObject;
@@ -255,12 +262,29 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
 
         if (plan is TransformationPlan.Failure failure)
         {
-            _conversionDiagnostics.Add(new PanelConversionDiagnostic(
+            AddDiagnostic(new PanelConversionDiagnostic(
                 panelTitle,
                 panelType,
                 "error",
-                failure.Reason));
+                failure.Reason,
+                failure.Code,
+                failure.DroppedSemantics,
+                failure.Approximation,
+                failure.ConfidenceScore));
             return MarkdownPanelConverter.CreateErrorWidget(panelTitle, panelType, failure.Reason);
+        }
+
+        if (plan is TransformationPlan.Success { Decision: not null } plannedDecision)
+        {
+            AddDiagnostic(new PanelConversionDiagnostic(
+                panelTitle,
+                panelType,
+                plannedDecision.Decision.Outcome,
+                plannedDecision.Decision.Reason,
+                plannedDecision.Decision.Code,
+                plannedDecision.Decision.DroppedSemantics,
+                plannedDecision.Decision.Approximation,
+                plannedDecision.Decision.ConfidenceScore));
         }
 
         JObject? widget = panelType switch
@@ -279,11 +303,15 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         {
             if (AllowedFallbackPanelTypes.Contains(panelType))
             {
-                _conversionDiagnostics.Add(new PanelConversionDiagnostic(
+                AddDiagnostic(new PanelConversionDiagnostic(
                     panelTitle,
                     panelType,
                     "fallback",
-                    "Converted with lineChart fallback."));
+                    "Converted with lineChart fallback.",
+                    "DGR-LIN-001",
+                    [],
+                    "linechart-fallback",
+                    0.9));
             }
 
             return widget;
@@ -291,35 +319,227 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
 
         if (DirectPanelTypes.Contains(panelType) || AllowedFallbackPanelTypes.Contains(panelType))
         {
-            _conversionDiagnostics.Add(new PanelConversionDiagnostic(
+            AddDiagnostic(new PanelConversionDiagnostic(
                 panelTitle,
                 panelType,
                 "skipped",
-                "Panel converter produced no widget (empty/hidden/invalid targets)."));
+                "Panel converter produced no widget (empty/hidden/invalid targets).",
+                "UNS-TGT-001",
+                [],
+                "none",
+                1.0));
             return null;
+        }
+
+        if (string.Equals(panelType, StatusHistoryPanelType, StringComparison.OrdinalIgnoreCase) &&
+            TryConvertShapeBasedFallback(panel, panelType, panelTitle, discoveredMetrics, plan, out var shapeFallbackWidget))
+        {
+            return shapeFallbackWidget;
         }
 
         if (options?.SkipUnsupportedPanels ?? true)
         {
-            _conversionDiagnostics.Add(new PanelConversionDiagnostic(
+            AddDiagnostic(new PanelConversionDiagnostic(
                 panelTitle,
                 panelType,
                 "skipped",
-                "Unsupported Grafana panel type."));
+                "Unsupported Grafana panel type.",
+                "UNS-PNL-001",
+                [],
+                "none",
+                1.0));
             return null;
         }
 
-        widget = _lineChartConverter.Convert(panel, discoveredMetrics, plan);
-        if (widget != null)
+        if (TryConvertShapeBasedFallback(panel, panelType, panelTitle, discoveredMetrics, plan, out var unsupportedFallbackWidget))
         {
-            _conversionDiagnostics.Add(new PanelConversionDiagnostic(
-                panelTitle,
-                panelType,
-                "fallback",
-                "Forced fallback for unsupported panel type."));
+            return unsupportedFallbackWidget;
         }
 
-        return widget;
+        return null;
+    }
+
+    private bool TryConvertShapeBasedFallback(
+        JObject panel,
+        string panelType,
+        string panelTitle,
+        ISet<string> discoveredMetrics,
+        TransformationPlan plan,
+        out JObject? widget)
+    {
+        widget = null;
+        var fallback = SelectShapeFallback(panelType, panel, plan);
+        if (fallback == null)
+            return false;
+
+        widget = fallback.WidgetType switch
+        {
+            "lineChart" => _lineChartConverter.Convert(panel, discoveredMetrics, plan),
+            "barChart" => _barChartConverter.Convert(panel, discoveredMetrics, plan),
+            "dataTable" => _dataTableConverter.Convert(panel, discoveredMetrics, plan),
+            _ => null
+        };
+
+        if (widget == null)
+            return false;
+
+        AddDiagnostic(new PanelConversionDiagnostic(
+            panelTitle,
+            panelType,
+            "fallback",
+            fallback.Reason,
+            fallback.Code,
+            [],
+            fallback.Approximation,
+            fallback.ConfidenceScore));
+        return true;
+    }
+
+    private static ShapeFallbackDecision? SelectShapeFallback(string panelType, JObject panel, TransformationPlan plan)
+    {
+        var targets = PanelTargetSelector.ResolveVisibleTargets(panel, plan);
+        if (targets.Count == 0)
+            return null;
+
+        var primaryTarget = targets[0];
+        var shape = AnalyzeTargetShape(primaryTarget);
+        if (string.Equals(panelType, StatusHistoryPanelType, StringComparison.OrdinalIgnoreCase))
+        {
+            if (shape.IsAggregatedLogs && shape.HasUsableMetric && shape.HasGroupingSignal)
+            {
+                return new ShapeFallbackDecision(
+                    "barChart",
+                    "Mapped status-history to barChart from aggregated logs shape (usable metric + grouping signal).",
+                    "DGR-STH-001",
+                    "shape-barchart",
+                    0.86);
+            }
+
+            return new ShapeFallbackDecision(
+                "dataTable",
+                "Mapped status-history to dataTable from ambiguous or record-like query shape.",
+                "DGR-STH-002",
+                "shape-table",
+                0.78);
+        }
+
+        if (shape.IsMetricsLike)
+        {
+            return new ShapeFallbackDecision(
+                "lineChart",
+                "Selected lineChart fallback from metrics-like target shape.",
+                "DGR-SHF-001",
+                "shape-linechart",
+                0.85);
+        }
+
+        if (shape.IsAggregatedLogs && shape.HasUsableMetric && shape.HasGroupingSignal)
+        {
+            if (shape.HasDateHistogram)
+            {
+                return new ShapeFallbackDecision(
+                    "lineChart",
+                    "Selected lineChart fallback from logs shape with date_histogram time bucketing.",
+                    "DGR-SHF-002",
+                    "shape-linechart",
+                    0.82);
+            }
+
+            return new ShapeFallbackDecision(
+                "barChart",
+                "Selected barChart fallback from aggregated logs shape with grouping.",
+                "DGR-SHF-003",
+                "shape-barchart",
+                0.8);
+        }
+
+        return new ShapeFallbackDecision(
+            "dataTable",
+            "Selected dataTable fallback from ambiguous or record-like query shape.",
+            "DGR-SHF-004",
+            "shape-table",
+            0.76);
+    }
+
+    private static TargetShape AnalyzeTargetShape(JObject target)
+    {
+        var dsType = target["datasource"]?["type"]?.ToString();
+        var isElasticsearchLike =
+            string.Equals(dsType, "elasticsearch", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(dsType, "opensearch", StringComparison.OrdinalIgnoreCase) ||
+            (target["bucketAggs"] is JArray && target["expr"] == null);
+        var isMetricsLike = target["expr"] is JValue ||
+                            string.Equals(dsType, "prometheus", StringComparison.OrdinalIgnoreCase);
+
+        var bucketAggs = target["bucketAggs"] as JArray ?? [];
+        var hasTerms = bucketAggs
+            .Children<JObject>()
+            .Any(b => string.Equals(b.Value<string>("type"), "terms", StringComparison.OrdinalIgnoreCase));
+        var hasDateHistogram = bucketAggs
+            .Children<JObject>()
+            .Any(b => string.Equals(b.Value<string>("type"), "date_histogram", StringComparison.OrdinalIgnoreCase));
+        var hasGroupingSignal = hasTerms || hasDateHistogram;
+
+        var metric = (target["metrics"] as JArray)?.Children<JObject>().FirstOrDefault();
+        var metricType = metric?.Value<string>("type") ?? string.Empty;
+        var metricField = metric?.Value<string>("field") ?? string.Empty;
+        var hasUsableMetric = IsUsableMetric(metricType, metricField);
+
+        return new TargetShape(
+            IsMetricsLike: isMetricsLike,
+            IsAggregatedLogs: isElasticsearchLike,
+            HasDateHistogram: hasDateHistogram,
+            HasGroupingSignal: hasGroupingSignal,
+            HasUsableMetric: hasUsableMetric);
+    }
+
+    private static bool IsUsableMetric(string metricType, string metricField)
+    {
+        if (string.IsNullOrWhiteSpace(metricType))
+            return false;
+
+        if (string.Equals(metricType, "count", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (string.Equals(metricType, "raw_data", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (metricType is "sum" or "avg" or "min" or "max")
+            return !string.IsNullOrWhiteSpace(metricField);
+
+        return true;
+    }
+
+    private sealed record ShapeFallbackDecision(
+        string WidgetType,
+        string Reason,
+        string Code,
+        string Approximation,
+        double ConfidenceScore);
+
+    private sealed record TargetShape(
+        bool IsMetricsLike,
+        bool IsAggregatedLogs,
+        bool HasDateHistogram,
+        bool HasGroupingSignal,
+        bool HasUsableMetric);
+
+    private void AddDiagnostic(PanelConversionDiagnostic diagnostic)
+    {
+        _conversionDiagnostics.Add(diagnostic);
+        _conversionDecisionEvents.Add(new JObject
+        {
+            ["panelTitle"] = diagnostic.PanelTitle,
+            ["panelType"] = diagnostic.PanelType,
+            ["outcome"] = diagnostic.Outcome,
+            ["code"] = diagnostic.Code ?? string.Empty,
+            ["reason"] = diagnostic.Reason,
+            ["droppedSemantics"] = diagnostic.DroppedSemantics != null
+                ? new JArray(diagnostic.DroppedSemantics)
+                : new JArray(),
+            ["approximation"] = diagnostic.Approximation ?? string.Empty,
+            ["confidenceScore"] = diagnostic.ConfidenceScore
+        });
     }
 
     private static JObject BuildSectionOptions(string? sectionTitle, int colorIndex)

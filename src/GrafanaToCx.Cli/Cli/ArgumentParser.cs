@@ -19,6 +19,7 @@ public static class ArgumentParser
             "convert" => ParseConvert(rest),
             "migrate" => ParseMigrate(rest),
             "verify" => ParseVerify(rest),
+            "import" => ParseImport(rest),
             _ => new ParsedArgs(CommandKind.Interactive, new Dictionary<string, string?>())
         };
     }
@@ -122,6 +123,36 @@ public static class ArgumentParser
         };
         return new ParsedArgs(CommandKind.Verify, dict);
     }
+
+    private static ParsedArgs ParseImport(ReadOnlySpan<string> rest)
+    {
+        string? input = null;
+        string? endpoint = "https://api.coralogix.com/mgmt/openapi/latest";
+
+        for (var i = 0; i < rest.Length; i++)
+        {
+            var arg = rest[i];
+            if (arg is "-e" or "--endpoint")
+            {
+                if (i + 1 < rest.Length)
+                {
+                    endpoint = rest[i + 1];
+                    i++;
+                }
+            }
+            else if (!arg.StartsWith('-'))
+            {
+                input ??= arg;
+            }
+        }
+
+        var dict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["input"] = input,
+            ["endpoint"] = endpoint
+        };
+        return new ParsedArgs(CommandKind.Import, dict);
+    }
 }
 
 public enum CommandKind
@@ -129,7 +160,8 @@ public enum CommandKind
     Interactive,
     Convert,
     Migrate,
-    Verify
+    Verify,
+    Import
 }
 
 public sealed record ParsedArgs(CommandKind Command, IReadOnlyDictionary<string, string?> Options)

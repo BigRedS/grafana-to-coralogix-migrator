@@ -1,4 +1,5 @@
 using Newtonsoft.Json.Linq;
+using GrafanaToCx.Core.Converter.Semantics;
 
 namespace GrafanaToCx.Core.ApiClient;
 
@@ -8,6 +9,7 @@ namespace GrafanaToCx.Core.ApiClient;
 /// </summary>
 public static class DashboardPayloadSanitizer
 {
+    private static readonly IQueryShapeValidator QueryShapeValidator = new QueryShapeValidator();
     private static readonly string[] PropertiesToRemove = { "stackedGroupName", "stackedGroupNameField" };
     private static readonly JArray DefaultDataTableColumns = new JArray
     {
@@ -23,10 +25,23 @@ public static class DashboardPayloadSanitizer
     {
         var cloned = (JObject)dashboard.DeepClone();
         RemovePropertiesRecursively(cloned, PropertiesToRemove);
+        RemoveUnsupportedGroupNames(cloned);
+        RemoveEmptyGroupingArrays(cloned);
         MigratePieChartDataPrimeQueries(cloned);
         EnsureDataTableColumns(cloned);
         EnsurePieChartLabelDefinition(cloned);
+        ValidateQueryShapes(cloned);
         return cloned;
+    }
+
+    private static void ValidateQueryShapes(JObject dashboard)
+    {
+        var errors = QueryShapeValidator.ValidateDashboard(dashboard);
+        if (errors.Count == 0)
+            return;
+
+        var summary = string.Join("; ", errors.Select(e => $"{e.Path}: {e.Message}"));
+        throw new InvalidOperationException($"Invalid dashboard query shape. {summary}");
     }
 
     /// <summary>
@@ -138,6 +153,27 @@ public static class DashboardPayloadSanitizer
         }
     }
 
+    private static void RemoveUnsupportedGroupNames(JToken token)
+    {
+        if (token is JObject obj)
+        {
+            RemoveGroupNamesFromQueryBranches(obj);
+            foreach (var prop in obj.Properties())
+                RemoveUnsupportedGroupNames(prop.Value);
+        }
+        else if (token is JArray array)
+        {
+            foreach (var item in array)
+                RemoveUnsupportedGroupNames(item);
+        }
+    }
+
+    private static void RemoveGroupNamesFromQueryBranches(JObject obj)
+    {
+        if (obj["logs"] is JObject logs)
+            logs.Property("groupNames")?.Remove();
+    }
+
     private static void EnsureDataTableColumns(JToken token)
     {
         if (token is JObject obj)
@@ -197,4 +233,32 @@ public static class DashboardPayloadSanitizer
             }
         }
     }
+
+    private static void RemoveEmptyGroupingArrays(JToken token)
+    {
+        if (token is JObject obj)
+        {
+            RemoveEmptyArrayProperty(obj, "groupNamesFields");
+            RemoveEmptyArrayProperty(obj, "groupBys");
+
+            foreach (var prop in obj.Properties().ToList())
+            {
+                RemoveEmptyGroupingArrays(prop.Value);
+            }
+        }
+        else if (token is JArray array)
+        {
+            foreach (var item in array)
+            {
+                RemoveEmptyGroupingArrays(item);
+            }
+        }
+    }
+
+    private static void RemoveEmptyArrayProperty(JObject obj, string propertyName)
+    {
+        if (obj[propertyName] is JArray arr && arr.Count == 0)
+            obj.Property(propertyName)?.Remove();
+    }
+
 }

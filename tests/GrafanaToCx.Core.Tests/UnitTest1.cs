@@ -94,6 +94,147 @@ public class UnitTest1
         Assert.Contains(
             converter.ConversionDiagnostics,
             d => d.PanelType == "custom-panel-type" && d.Outcome == "fallback");
+        Assert.Contains(
+            converter.ConversionDiagnostics,
+            d => d.PanelType == "custom-panel-type" && d.Code == "DGR-SHF-001");
+    }
+
+    [Fact]
+    public void StatusHistory_DateHistogramAndNumericMetric_UsesBarChartFallback()
+    {
+        var converter = CreateConverter();
+        var result = converter.ConvertToJObject(
+            BuildDashboardJson(new JObject
+            {
+                ["id"] = 4,
+                ["title"] = "Status History Aggregated",
+                ["type"] = "status-history",
+                ["targets"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["refId"] = "A",
+                        ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                        ["query"] = "service:payments",
+                        ["bucketAggs"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["type"] = "date_histogram",
+                                ["field"] = "@timestamp",
+                                ["settings"] = new JObject { ["interval"] = "1m" }
+                            },
+                            new JObject
+                            {
+                                ["type"] = "terms",
+                                ["field"] = "status.keyword"
+                            }
+                        },
+                        ["metrics"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["id"] = "1",
+                                ["type"] = "avg",
+                                ["field"] = "duration.keyword"
+                            }
+                        }
+                    }
+                }
+            }));
+
+        var widgets = ExtractWidgets(result);
+        Assert.Single(widgets);
+        Assert.NotNull(widgets[0]["definition"]?["barChart"]);
+        Assert.Null(widgets[0]["definition"]?["lineChart"]);
+        Assert.Contains(
+            converter.ConversionDiagnostics,
+            d => d.PanelType == "status-history" && d.Code == "DGR-STH-001");
+    }
+
+    [Fact]
+    public void StatusHistory_AmbiguousShape_UsesTableFallback()
+    {
+        var converter = CreateConverter();
+        var result = converter.ConvertToJObject(
+            BuildDashboardJson(new JObject
+            {
+                ["id"] = 5,
+                ["title"] = "Status History Ambiguous",
+                ["type"] = "status-history",
+                ["targets"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["refId"] = "A",
+                        ["query"] = "service:payments"
+                    }
+                }
+            }));
+
+        var widgets = ExtractWidgets(result);
+        Assert.Single(widgets);
+        Assert.NotNull(widgets[0]["definition"]?["dataTable"]);
+        Assert.Null(widgets[0]["definition"]?["lineChart"]);
+        Assert.Contains(
+            converter.ConversionDiagnostics,
+            d => d.PanelType == "status-history" && d.Code == "DGR-STH-002");
+    }
+
+    [Fact]
+    public void StatusHistory_MultiTarget_ReductionIsDeterministicAndDiagnosticBacked()
+    {
+        var converter = CreateConverter();
+        var result = converter.ConvertToJObject(
+            BuildDashboardJson(new JObject
+            {
+                ["id"] = 6,
+                ["title"] = "Status History Multi",
+                ["type"] = "status-history",
+                ["targets"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["refId"] = "A",
+                        ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                        ["query"] = "service:payments AND region:us",
+                        ["bucketAggs"] = new JArray
+                        {
+                            new JObject { ["type"] = "terms", ["field"] = "status.keyword" }
+                        },
+                        ["metrics"] = new JArray
+                        {
+                            new JObject { ["id"] = "1", ["type"] = "count" }
+                        }
+                    },
+                    new JObject
+                    {
+                        ["refId"] = "B",
+                        ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                        ["query"] = "service:payments AND region:eu",
+                        ["bucketAggs"] = new JArray
+                        {
+                            new JObject { ["type"] = "terms", ["field"] = "status.keyword" }
+                        },
+                        ["metrics"] = new JArray
+                        {
+                            new JObject { ["id"] = "1", ["type"] = "count" }
+                        }
+                    }
+                }
+            }));
+
+        var widgets = ExtractWidgets(result);
+        Assert.Single(widgets);
+        var logsQuery = widgets[0]["definition"]?["barChart"]?["query"]?["logs"] as JObject;
+        Assert.NotNull(logsQuery);
+        Assert.Equal(
+            "service:payments AND region:us",
+            logsQuery!["luceneQuery"]?["value"]?.ToString());
+
+        var reductionDiagnostic = Assert.Single(
+            converter.ConversionDiagnostics.Where(d => d.PanelType == "status-history" && d.Code == "DGR-MTG-001"));
+        Assert.Contains("B", reductionDiagnostic.DroppedSemantics ?? []);
     }
 
     [Theory]

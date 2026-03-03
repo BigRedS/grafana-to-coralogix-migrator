@@ -1,4 +1,5 @@
 using GrafanaToCx.Core.Converter.Transformations;
+using GrafanaToCx.Core.Converter.Semantics;
 using Newtonsoft.Json.Linq;
 
 namespace GrafanaToCx.Core.Converter.PanelConverters;
@@ -16,16 +17,15 @@ namespace GrafanaToCx.Core.Converter.PanelConverters;
 /// </summary>
 public sealed class PieChartPanelConverter : IPanelConverter
 {
+    private static readonly IAggregationMapper AggregationMapper = new AggregationMapper();
+
     public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
-        var targets = panel["targets"] as JArray;
-        if (targets == null || targets.Count == 0)
+        var targets = PanelTargetSelector.ResolveVisibleTargets(panel, plan);
+        if (targets.Count == 0)
             return null;
 
-        var target = targets.Children<JObject>()
-            .FirstOrDefault(t => t.Value<bool?>("hide") != true);
-        if (target == null)
-            return null;
+        var target = targets[0];
 
         var grafanaUnit = panel["fieldConfig"]?["defaults"]?["unit"]?.ToString() ?? "none";
         var legendOptions = panel["options"]?["legend"] as JObject ?? new JObject();
@@ -39,7 +39,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
         {
             pieQuery = IsElasticsearchTarget(target)
                 ? BuildLogsQuery(target)
-                : BuildMetricsQuery(target, discoveredMetrics);
+                : BuildMetricsQuery(panel, target, discoveredMetrics);
         }
 
         return new JObject
@@ -89,15 +89,17 @@ public sealed class PieChartPanelConverter : IPanelConverter
                 groupNamesFields.Add(CxFieldHelper.ToGroupByField(field));
         }
 
-        var aggregation = BuildLogsAggregation(target["metrics"] as JArray ?? new JArray());
+        var aggregation = AggregationMapper.MapLogsAggregation(target["metrics"] as JArray ?? new JArray());
         var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(target.Value<string>("query") ?? string.Empty);
 
         var logsQuery = new JObject
         {
             ["aggregation"] = aggregation,
-            ["filters"] = new JArray(),
-            ["groupNamesFields"] = groupNamesFields
+            ["filters"] = new JArray()
         };
+
+        if (groupNamesFields.Count > 0)
+            logsQuery["groupNamesFields"] = groupNamesFields;
 
         if (!string.IsNullOrWhiteSpace(luceneQuery) && luceneQuery != "*")
             logsQuery["luceneQuery"] = new JObject { ["value"] = luceneQuery };
@@ -105,38 +107,44 @@ public sealed class PieChartPanelConverter : IPanelConverter
         return new JObject { ["logs"] = logsQuery };
     }
 
-    private static JObject BuildMetricsQuery(JObject target, ISet<string> discoveredMetrics)
+    private static JObject BuildMetricsQuery(JObject panel, JObject target, ISet<string> discoveredMetrics)
     {
         var expr = target.Value<string>("expr") ?? string.Empty;
         var promql = QueryHelpers.CleanQuery(expr, discoveredMetrics);
+        var groupName = InferMetricsGroupNameFromDisplayName(panel);
+
+        var metricsQuery = new JObject
+        {
+            ["promqlQuery"] = new JObject { ["value"] = promql },
+            ["aggregation"] = "AGGREGATION_LAST",
+            ["editorMode"] = "METRICS_QUERY_EDITOR_MODE_TEXT",
+            ["filters"] = new JArray()
+        };
+
+        if (!string.IsNullOrWhiteSpace(groupName))
+            metricsQuery["groupNames"] = new JArray(groupName);
 
         return new JObject
         {
-            ["metrics"] = new JObject
-            {
-                ["promqlQuery"] = new JObject { ["value"] = promql },
-                ["aggregation"] = "AGGREGATION_LAST",
-                ["editorMode"] = "METRICS_QUERY_EDITOR_MODE_TEXT",
-                ["filters"] = new JArray(),
-                ["groupNames"] = new JArray()
-            }
+            ["metrics"] = metricsQuery
         };
     }
 
-    private static JObject BuildLogsAggregation(JArray metrics)
+    private static string? InferMetricsGroupNameFromDisplayName(JObject panel)
     {
-        var first = metrics.Children<JObject>().FirstOrDefault();
-        var type = first?.Value<string>("type")?.ToLowerInvariant();
-        var field = CxFieldHelper.StripLogsFieldSuffixes(first?.Value<string>("field") ?? "");
+        const string labelPrefix = "${__field.labels.";
+        const string suffix = "}";
 
-        return type switch
-        {
-            "sum" => new JObject { ["sum"] = new JObject { ["field"] = field } },
-            "avg" => new JObject { ["average"] = new JObject { ["field"] = field } },
-            "min" => new JObject { ["min"] = new JObject { ["field"] = field } },
-            "max" => new JObject { ["max"] = new JObject { ["field"] = field } },
-            _ => new JObject { ["count"] = new JObject() }
-        };
+        var displayName = panel["fieldConfig"]?["defaults"]?["displayName"]?.ToString();
+        if (string.IsNullOrWhiteSpace(displayName))
+            return null;
+
+        if (!displayName.StartsWith(labelPrefix, StringComparison.Ordinal) ||
+            !displayName.EndsWith(suffix, StringComparison.Ordinal))
+            return null;
+
+        var label = displayName[labelPrefix.Length..^suffix.Length].Trim();
+        return string.IsNullOrWhiteSpace(label) ? null : label;
     }
 
     private static bool IsElasticsearchTarget(JObject target)
@@ -153,7 +161,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
     /// Converts legacy consolidated payload shape:
     /// { logs: {...}, dataPrime: { value: "..." } }
     /// into API-supported DataPrime shape:
-    /// { logs: {...}, dataprime: { dataprimeQuery: { text: "..." }, filters: [], groupNames: [...] } }
+    /// { logs: {...}, dataprime: { dataprimeQuery: { text: "..." }, filters: [] } }
     /// </summary>
     private static JObject NormalizeConsolidatedQueryPayload(JObject payload)
     {
@@ -163,27 +171,13 @@ public sealed class PieChartPanelConverter : IPanelConverter
         if (string.IsNullOrWhiteSpace(dataPrimeValue))
             return normalized;
 
-        var groupNames = new JArray();
-        var groupNamesFields = normalized["logs"]?["groupNamesFields"] as JArray;
-        if (groupNamesFields != null)
-        {
-            foreach (var field in groupNamesFields.Children<JObject>())
-            {
-                var keypath = field["keypath"] as JArray;
-                if (keypath == null || keypath.Count == 0)
-                    continue;
-                groupNames.Add(string.Join(".", keypath.Select(k => k.ToString())));
-            }
-        }
-
         var dataprime = new JObject
         {
             ["dataprimeQuery"] = new JObject
             {
                 ["text"] = dataPrimeValue
             },
-            ["filters"] = new JArray(),
-            ["groupNames"] = groupNames
+            ["filters"] = new JArray()
         };
         
         // PieChart.query uses oneof semantics in API contract; keep only dataprime.

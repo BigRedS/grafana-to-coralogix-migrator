@@ -1,0 +1,52 @@
+{
+  "dashboard": {
+    "title": "Diff Bar B",
+    "panels": [
+      {
+        "id": 2,
+        "title": "Requests by Level",
+        "type": "barchart",
+        "targets": [
+          {
+            "refId": "A",
+            "query": "service:web",
+            "datasource": {
+              "type": "elasticsearch"
+            },
+            "bucketAggs": [
+              {
+                "type": "terms",
+                "field": "level.keyword"
+              }
+            ],
+            "metrics": [
+              {
+                "type": "sum",
+                "field": "count.keyword"
+              }
+            ]
+          },
+          {
+            "refId": "B",
+            "query": "service:api",
+            "datasource": {
+              "type": "elasticsearch"
+            },
+            "bucketAggs": [
+              {
+                "type": "terms",
+                "field": "level.keyword"
+              }
+            ],
+            "metrics": [
+              {
+                "type": "sum",
+                "field": "count.keyword"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

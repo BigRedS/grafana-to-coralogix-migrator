@@ -35,7 +35,25 @@ public sealed class FolderCleanupService
             .GroupBy(f => f.ParentId!)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        // Collect all folders to process: selected + all descendants recursively
+        var validSelectedFolders = new List<CxFolderItem>(selectedFolders.Count);
+        foreach (var selectedFolder in selectedFolders)
+        {
+            if (foldersById.TryGetValue(selectedFolder.Id, out var folder))
+            {
+                validSelectedFolders.Add(folder);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Selected folder '{FolderName}' ({FolderId}) was not found at execution time and will be skipped.",
+                    selectedFolder.Name,
+                    selectedFolder.Id);
+            }
+        }
+
+        var canonicalSelectedRoots = FolderSelectionNormalizer.NormalizeSelectedRoots(validSelectedFolders, allFolders);
+
+        // Collect all folders to process: canonical selected roots + all descendants recursively
         var foldersToProcess = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var foldersToProcessList = new List<CxFolderItem>();
 
@@ -55,12 +73,9 @@ public sealed class FolderCleanupService
             }
         }
 
-        foreach (var selectedFolder in selectedFolders)
+        foreach (var selectedFolder in canonicalSelectedRoots)
         {
-            if (foldersById.TryGetValue(selectedFolder.Id, out var folder))
-            {
-                AddFolderAndDescendants(folder);
-            }
+            AddFolderAndDescendants(selectedFolder);
         }
 
         // Build selections with dashboards for all folders (selected + descendants)
@@ -78,7 +93,7 @@ public sealed class FolderCleanupService
             return new FolderCleanupResult(
                 BackupSucceeded: false,
                 BackupFilePath: backupFilePath,
-                SelectedFolders: selectedFolders.Count,
+                SelectedFolders: canonicalSelectedRoots.Count,
                 BackedUpDashboards: backupResult.WrittenDashboards,
                 DeletedDashboards: 0,
                 FailedDashboardDeletions: 0,
@@ -201,7 +216,7 @@ public sealed class FolderCleanupService
         return new FolderCleanupResult(
             BackupSucceeded: true,
             BackupFilePath: backupFilePath,
-            SelectedFolders: selectedFolders.Count,
+            SelectedFolders: canonicalSelectedRoots.Count,
             BackedUpDashboards: backupResult.WrittenDashboards,
             DeletedDashboards: deletedDashboards,
             FailedDashboardDeletions: failedDashboardDeletions,

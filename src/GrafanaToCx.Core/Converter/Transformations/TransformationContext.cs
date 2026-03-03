@@ -34,4 +34,9 @@ public sealed class TransformationContext
         var spec = panel["data"]?["spec"]?["transformations"] as JArray;
         return spec ?? new JArray();
     }
+
+    public TransformationContext WithTargets(IReadOnlyList<JObject> targets)
+    {
+        return new TransformationContext(Panel, new JArray(targets), Transformations);
+    }
 }

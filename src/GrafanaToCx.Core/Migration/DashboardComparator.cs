@@ -15,12 +15,13 @@ public sealed record WidgetVerificationResult(
 
 public sealed record DashboardComparisonResult(
     string DashboardTitle,
-    IReadOnlyList<WidgetVerificationResult> Widgets)
+    IReadOnlyList<WidgetVerificationResult> Widgets,
+    double CoverageThreshold = 80.0)
 {
     public int Total => Widgets.Count;
     public int Working => Widgets.Count(w => w.IsWorking);
     public double Coverage => Total > 0 ? (double)Working / Total * 100.0 : 0.0;
-    public bool Passed => Coverage >= 80.0;
+    public bool Passed => Coverage >= CoverageThreshold;
 }
 
 /// <summary>
@@ -31,7 +32,10 @@ public sealed record DashboardComparisonResult(
 /// </summary>
 public static class DashboardComparator
 {
-    public static DashboardComparisonResult Compare(JObject grafanaDashboard, JObject cxDashboard)
+    public static DashboardComparisonResult Compare(
+        JObject grafanaDashboard,
+        JObject cxDashboard,
+        double coverageThreshold = 80.0)
     {
         var dashboardTitle = cxDashboard.Value<string>("name")
                              ?? grafanaDashboard.Value<string>("title")
@@ -98,7 +102,7 @@ public static class DashboardComparator
             results.Add(result);
         }
 
-        return new DashboardComparisonResult(dashboardTitle, results);
+        return new DashboardComparisonResult(dashboardTitle, results, coverageThreshold);
     }
 
     /// <summary>

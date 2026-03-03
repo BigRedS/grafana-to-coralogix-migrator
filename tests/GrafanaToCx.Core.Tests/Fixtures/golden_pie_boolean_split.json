@@ -1,0 +1,50 @@
+{
+  "dashboard": {
+    "title": "Golden Pie",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Email Split",
+        "type": "piechart",
+        "targets": [
+          {
+            "refId": "A",
+            "query": "app:foo AND payload.isEmail:true",
+            "datasource": {
+              "type": "elasticsearch"
+            },
+            "bucketAggs": [
+              {
+                "type": "terms",
+                "field": "payload.isEmail"
+              }
+            ],
+            "metrics": [
+              {
+                "type": "count"
+              }
+            ]
+          },
+          {
+            "refId": "B",
+            "query": "app:foo AND payload.isEmail:false",
+            "datasource": {
+              "type": "elasticsearch"
+            },
+            "bucketAggs": [
+              {
+                "type": "terms",
+                "field": "payload.isEmail"
+              }
+            ],
+            "metrics": [
+              {
+                "type": "count"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
