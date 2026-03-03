@@ -1,3 +1,5 @@
+using GrafanaToCx.Core.Converter.Transformations;
+using GrafanaToCx.Core.Converter.Semantics;
 using Newtonsoft.Json.Linq;
 
 namespace GrafanaToCx.Core.Converter.PanelConverters;
@@ -9,22 +11,23 @@ namespace GrafanaToCx.Core.Converter.PanelConverters;
 /// </summary>
 public sealed class BarChartPanelConverter : IPanelConverter
 {
-    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics)
+    private static readonly IAggregationMapper AggregationMapper = new AggregationMapper();
+
+    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
-        var targets = panel["targets"] as JArray;
-        if (targets == null || targets.Count == 0)
+        var targets = PanelTargetSelector.ResolveVisibleTargets(panel, plan);
+        if (targets.Count == 0)
             return null;
 
-        var target = targets.Children<JObject>()
-            .FirstOrDefault(t => t.Value<bool?>("hide") != true);
-        if (target == null)
-            return null;
+        var target = targets[0];
 
         var grafanaUnit = panel["fieldConfig"]?["defaults"]?["unit"]?.ToString() ?? "none";
 
-        var barQuery = IsElasticsearchTarget(target)
-            ? BuildLogsQuery(target)
-            : BuildMetricsQuery(target, discoveredMetrics);
+        var barQuery = TryBuildConsolidatedDataprimeQuery(plan, out var dataprimeQuery)
+            ? dataprimeQuery
+            : IsElasticsearchTarget(target)
+                ? BuildLogsQuery(target)
+                : BuildMetricsQuery(target, discoveredMetrics);
 
         return new JObject
         {
@@ -51,29 +54,69 @@ public sealed class BarChartPanelConverter : IPanelConverter
         };
     }
 
+    private static bool TryBuildConsolidatedDataprimeQuery(TransformationPlan? plan, out JObject query)
+    {
+        query = new JObject();
+        if (plan is not TransformationPlan.Success { ConsolidatedQueryPayload: not null } success)
+            return false;
+
+        var dataprime = success.ConsolidatedQueryPayload!["dataprime"] as JObject;
+        var text = dataprime?["dataprimeQuery"]?["text"]?.ToString();
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        query = new JObject
+        {
+            ["dataprime"] = new JObject
+            {
+                ["dataprimeQuery"] = new JObject
+                {
+                    ["text"] = text
+                },
+                ["filters"] = new JArray()
+            }
+        };
+
+        return true;
+    }
+
     private static JObject BuildLogsQuery(JObject target)
     {
         var groupNamesFields = new JArray();
         var bucketAggs = target["bucketAggs"] as JArray ?? new JArray();
+        var hasDateHistogram = false;
 
         foreach (var bucket in bucketAggs.Children<JObject>())
         {
-            if (!string.Equals(bucket.Value<string>("type"), "terms", StringComparison.OrdinalIgnoreCase))
+            var bucketType = bucket.Value<string>("type");
+            if (string.Equals(bucketType, "date_histogram", StringComparison.OrdinalIgnoreCase))
+            {
+                hasDateHistogram = true;
                 continue;
-            var field = bucket.Value<string>("field") ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(field))
-                groupNamesFields.Add(CxFieldHelper.ToGroupByField(field));
+            }
+
+            if (string.Equals(bucketType, "terms", StringComparison.OrdinalIgnoreCase))
+            {
+                var field = bucket.Value<string>("field") ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(field))
+                    groupNamesFields.Add(CxFieldHelper.ToGroupByField(field));
+            }
         }
 
-        var aggregation = BuildLogsAggregation(target["metrics"] as JArray ?? new JArray());
+        if (groupNamesFields.Count == 0 && hasDateHistogram)
+            groupNamesFields.Add(CxFieldHelper.ToGroupByField("timestamp"));
+
+        var aggregation = AggregationMapper.MapLogsAggregation(target["metrics"] as JArray ?? new JArray());
         var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(target.Value<string>("query") ?? string.Empty);
 
         var logsQuery = new JObject
         {
             ["aggregation"] = aggregation,
-            ["filters"] = new JArray(),
-            ["groupNamesFields"] = groupNamesFields
+            ["filters"] = new JArray()
         };
+
+        if (groupNamesFields.Count > 0)
+            logsQuery["groupNamesFields"] = groupNamesFields;
 
         if (!string.IsNullOrWhiteSpace(luceneQuery) && luceneQuery != "*")
             logsQuery["luceneQuery"] = new JObject { ["value"] = luceneQuery };
@@ -93,25 +136,8 @@ public sealed class BarChartPanelConverter : IPanelConverter
                 ["promqlQuery"] = new JObject { ["value"] = promql },
                 ["aggregation"] = "AGGREGATION_LAST",
                 ["editorMode"] = "METRICS_QUERY_EDITOR_MODE_TEXT",
-                ["filters"] = new JArray(),
-                ["groupNames"] = new JArray()
+                ["filters"] = new JArray()
             }
-        };
-    }
-
-    private static JObject BuildLogsAggregation(JArray metrics)
-    {
-        var first = metrics.Children<JObject>().FirstOrDefault();
-        var type = first?.Value<string>("type")?.ToLowerInvariant();
-        var field = CxFieldHelper.StripLogsFieldSuffixes(first?.Value<string>("field") ?? "");
-
-        return type switch
-        {
-            "sum" => new JObject { ["sum"] = new JObject { ["field"] = field } },
-            "avg" => new JObject { ["average"] = new JObject { ["field"] = field } },
-            "min" => new JObject { ["min"] = new JObject { ["field"] = field } },
-            "max" => new JObject { ["max"] = new JObject { ["field"] = field } },
-            _ => new JObject { ["count"] = new JObject() }
         };
     }
 

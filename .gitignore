@@ -64,3 +64,4 @@ cx-folder-delete-backup-*/
 **/obj/
 publish/
 artifacts/
+src/GrafanaToCx.Cli/migration-settings.integration.json

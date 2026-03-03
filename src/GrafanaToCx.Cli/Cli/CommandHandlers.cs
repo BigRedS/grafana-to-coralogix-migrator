@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using GrafanaToCx.Core.ApiClient;
 using GrafanaToCx.Core.Converter;
+using GrafanaToCx.Core.Converter.Transformations;
 using GrafanaToCx.Core.Migration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -21,10 +22,10 @@ public sealed class CommandHandlers
         _loggerFactory = loggerFactory;
     }
 
-    private IGrafanaToCxConverter CreateConverter()
+    private IGrafanaToCxConverter CreateConverter(MultiLuceneMergeOptions? mergeOptions = null)
     {
         var converterLogger = _loggerFactory.CreateLogger<GrafanaToCxConverter>();
-        return new GrafanaToCxConverter(converterLogger);
+        return new GrafanaToCxConverter(converterLogger, mergeOptions);
     }
 
     // ── Convert ───────────────────────────────────────────────────────────────
@@ -154,9 +155,23 @@ public sealed class CommandHandlers
             .ToList();
         var actualCount = cxWidgets.Count;
 
+        var grafanaSource = Newtonsoft.Json.Linq.JObject.Parse(grafanaJson);
+        var comparison = DashboardComparator.Compare(grafanaSource, cxDashboard, 80.0);
+
         Console.WriteLine();
         Console.WriteLine($"CX dashboard ID   : {dashboardId}");
         Console.WriteLine($"Actual widgets    : {actualCount}");
+        Console.WriteLine($"Comparator coverage: {comparison.Coverage:F1}% (threshold {comparison.CoverageThreshold:F1}%)");
+
+        if (!comparison.Passed)
+        {
+            Console.WriteLine("[FAIL] Comparator coverage is below threshold.");
+            foreach (var failed in comparison.Widgets.Where(w => !w.IsWorking))
+            {
+                Console.WriteLine($"  - {failed.PanelTitle}: {failed.Notes}");
+            }
+            return 1;
+        }
 
         if (actualCount == expectedCount)
         {
@@ -190,17 +205,33 @@ public sealed class CommandHandlers
         if (interactive)
             return await RunInteractiveConsoleAsync(settingsFile);
 
-        var grafanaApiKey = Environment.GetEnvironmentVariable("GRAFANA_API_KEY");
-        if (string.IsNullOrEmpty(grafanaApiKey))
+        if (!File.Exists(settingsFile))
         {
-            Console.Error.WriteLine("Error: GRAFANA_API_KEY environment variable is not set.");
+            Console.Error.WriteLine($"Error: settings file '{settingsFile}' not found.");
+            return 1;
+        }
+
+        var absoluteSettingsPath = Path.GetFullPath(settingsFile);
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(absoluteSettingsPath, optional: false)
+            .Build();
+        var settings = configuration.Get<MigrationSettings>() ?? new MigrationSettings();
+
+        var grafanaApiKey = Environment.GetEnvironmentVariable("GRAFANA_API_KEY");
+        if (string.IsNullOrWhiteSpace(grafanaApiKey))
+            grafanaApiKey = settings.Credentials.GrafanaApiKey;
+        if (string.IsNullOrWhiteSpace(grafanaApiKey))
+        {
+            Console.Error.WriteLine("Error: Grafana API key is required. Set GRAFANA_API_KEY or provide credentials.grafanaApiKey in settings.");
             return 1;
         }
 
         var cxApiKey = Environment.GetEnvironmentVariable("CX_API_KEY");
-        if (string.IsNullOrEmpty(cxApiKey))
+        if (string.IsNullOrWhiteSpace(cxApiKey))
+            cxApiKey = settings.Credentials.CxApiKey;
+        if (string.IsNullOrWhiteSpace(cxApiKey))
         {
-            Console.Error.WriteLine("Error: CX_API_KEY environment variable is not set.");
+            Console.Error.WriteLine("Error: Coralogix API key is required. Set CX_API_KEY or provide credentials.cxApiKey in settings.");
             return 1;
         }
 
@@ -261,7 +292,8 @@ public sealed class CommandHandlers
         if (settings.Coralogix.MigrateFolderStructure)
             structureFoldersClient = cxFoldersClient;
 
-        var converter = CreateConverter();
+        var mergeOptions = new MultiLuceneMergeOptions(settings.Migration.MultiLuceneMerge.AllowlistedWidgetTypes);
+        var converter = CreateConverter(mergeOptions);
         var validator = new DashboardValidator();
 
         if (promptInteractive && File.Exists(settings.Migration.CheckpointFile))
@@ -353,9 +385,8 @@ public sealed class CommandHandlers
         if (strategy == strategyChoices[0])
         {
             var rootFolders = cxFolders.Where(f => f.ParentId is null).ToList();
-            var parentChoices = rootFolders
-                .Select(f => f.Name)
-                .Concat(["+ Create new folder"])
+            var parentChoices = new[] { "+ Create new folder" }
+                .Concat(rootFolders.Select(f => f.Name))
                 .ToList();
             var parentChoice = Prompt.Select("Select or create parent CX folder", parentChoices);
 
@@ -405,9 +436,9 @@ public sealed class CommandHandlers
         {
             foreach (var grafanaFolderName in selectedFolderNames)
             {
-                var mapChoices = cxFolders
-                    .Select(f => f.Name)
-                    .Concat(["(none — no folder)", "+ Create new folder"])
+                var mapChoices = new[] { "+ Create new folder" }
+                    .Concat(cxFolders.Select(f => f.Name))
+                    .Concat(["(none — no folder)"])
                     .ToList();
                 var mapChoice = Prompt.Select($"Map '{grafanaFolderName}' → Coralogix folder", mapChoices);
 
@@ -596,16 +627,29 @@ public sealed class CommandHandlers
         }
 
         var flatFolders = BuildFlatFolderList(folders);
-        var selectedFolder = Prompt.Select("Select folder for cleanup", flatFolders, textSelector: x => x.Display);
-        if (selectedFolder is null)
+        var selectedFolders = MultiSelectWithFallback.SelectRequired(
+            "Select folders for cleanup",
+            flatFolders,
+            x => x.Display);
+        if (selectedFolders.Count == 0)
         {
-            Console.WriteLine("Aborted.");
+            Console.WriteLine("No folders selected.");
+            return;
+        }
+
+        var canonicalSelectedRoots = FolderSelectionNormalizer.NormalizeSelectedRoots(
+            selectedFolders.Select(x => x.Folder).ToList(),
+            folders);
+        if (canonicalSelectedRoots.Count == 0)
+        {
+            Console.WriteLine("No folders selected.");
             return;
         }
 
         Console.Clear();
-        Console.WriteLine("Selected folder for cleanup:");
-        Console.WriteLine($"  {selectedFolder.Folder.Name} ({selectedFolder.Folder.Id})");
+        Console.WriteLine("Selected root folder(s) for cleanup:");
+        foreach (var selectedRoot in canonicalSelectedRoots)
+            Console.WriteLine($"  - {selectedRoot.Name} ({selectedRoot.Id})");
         Console.WriteLine();
         Console.WriteLine("Loading nested folders and dashboards...");
 
@@ -636,10 +680,8 @@ public sealed class CommandHandlers
             }
         }
 
-        if (foldersById.TryGetValue(selectedFolder.Folder.Id, out var selectedFolderFull))
-        {
-            AddFolderAndDescendants(selectedFolderFull);
-        }
+        foreach (var selectedRoot in canonicalSelectedRoots)
+            AddFolderAndDescendants(selectedRoot);
 
         // Collect all dashboards from all folders
         var allDashboards = new List<(CxFolderItem Folder, DashboardCatalogItem Dashboard)>();
@@ -684,7 +726,9 @@ public sealed class CommandHandlers
 
         Console.Clear();
         Console.WriteLine("Cleanup plan:");
-        Console.WriteLine($"  Selected folder: '{selectedFolder.Folder.Name}' ({selectedFolder.Folder.Id})");
+        Console.WriteLine($"  Selected root folders: {canonicalSelectedRoots.Count}");
+        foreach (var selectedRoot in canonicalSelectedRoots)
+            Console.WriteLine($"    - {selectedRoot.Name} ({selectedRoot.Id})");
         Console.WriteLine($"  Total folders to delete: {foldersToProcessList.Count} (including {foldersToProcessList.Count - 1} nested folder(s))");
         Console.WriteLine($"  Total dashboards to backup/delete: {allDashboards.Count}");
         Console.WriteLine();
@@ -697,7 +741,8 @@ public sealed class CommandHandlers
                 var depth = folderDepthMap[folder.Id];
                 var indent = new string(' ', depth * 2);
                 var shortId = folder.Id.Length > 8 ? folder.Id[..8] : folder.Id;
-                var isSelected = folder.Id == selectedFolder.Folder.Id;
+                var isSelected = canonicalSelectedRoots.Any(root =>
+                    string.Equals(root.Id, folder.Id, StringComparison.OrdinalIgnoreCase));
                 var marker = isSelected ? "*" : " ";
                 Console.WriteLine($"    {marker} {indent}{folder.Name} [{shortId}]");
             }
@@ -755,7 +800,7 @@ public sealed class CommandHandlers
             return;
         }
 
-        var result = await cleanupService.CleanupAsync([selectedFolder.Folder], backupPath);
+        var result = await cleanupService.CleanupAsync(canonicalSelectedRoots, backupPath);
 
         Console.WriteLine();
         Console.WriteLine("Cleanup result:");
@@ -1161,9 +1206,9 @@ public sealed class CommandHandlers
         foreach (var (dir, count) in selectedFolders)
         {
             var label = dir == rootDir ? "(root)" : Path.GetRelativePath(rootDir, dir);
-            var mapChoices = cxFolders
-                .Select(f => f.Name)
-                .Concat(["(none — no folder)", "+ Create new folder"])
+            var mapChoices = new[] { "+ Create new folder" }
+                .Concat(cxFolders.Select(f => f.Name))
+                .Concat(["(none — no folder)"])
                 .ToList();
             var mapChoice = Prompt.Select($"Map '{label}' ({count} dashboard(s)) → Coralogix folder", mapChoices);
 

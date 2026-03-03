@@ -32,20 +32,43 @@ public class VariablePlaceholderNormalizationTests
 
     private static string? GetLuceneQuery(JObject? widget)
     {
-        return widget?["definition"]?["dataTable"]?["query"]?["logs"]?["luceneQuery"]?["value"]?.ToString()
-            ?? widget?["definition"]?["barChart"]?["query"]?["logs"]?["luceneQuery"]?["value"]?.ToString()
-            ?? widget?["definition"]?["pieChart"]?["query"]?["logs"]?["luceneQuery"]?["value"]?.ToString()
-            ?? widget?["definition"]?["gauge"]?["query"]?["logs"]?["luceneQuery"]?["value"]?.ToString()
-            ?? widget?["definition"]?["lineChart"]?["queryDefinitions"]?[0]?["query"]?["logs"]?["luceneQuery"]?["value"]?.ToString();
+        return GetFirstTokenValue(
+            widget,
+            "definition.dataTable.query.logs.luceneQuery.value",
+            "definition.barChart.query.logs.luceneQuery.value",
+            "definition.pieChart.query.logs.luceneQuery.value",
+            "definition.gauge.query.logs.luceneQuery.value",
+            "definition.lineChart.queryDefinitions[0].query.logs.luceneQuery.value");
     }
 
     private static string? GetPromqlQuery(JObject? widget)
     {
-        return widget?["definition"]?["dataTable"]?["query"]?["metrics"]?["promqlQuery"]?["value"]?.ToString()
-            ?? widget?["definition"]?["barChart"]?["query"]?["metrics"]?["promqlQuery"]?["value"]?.ToString()
-            ?? widget?["definition"]?["pieChart"]?["query"]?["metrics"]?["promqlQuery"]?["value"]?.ToString()
-            ?? widget?["definition"]?["gauge"]?["query"]?["metrics"]?["promqlQuery"]?["value"]?.ToString()
-            ?? widget?["definition"]?["lineChart"]?["queryDefinitions"]?[0]?["query"]?["metrics"]?["promqlQuery"]?["value"]?.ToString();
+        return GetFirstTokenValue(
+            widget,
+            "definition.dataTable.query.metrics.promqlQuery.value",
+            "definition.barChart.query.metrics.promqlQuery.value",
+            "definition.pieChart.query.metrics.promqlQuery.value",
+            "definition.gauge.query.metrics.promqlQuery.value",
+            "definition.lineChart.queryDefinitions[0].query.metrics.promqlQuery.value");
+    }
+
+    private static string? GetFirstTokenValue(JObject? root, params string[] paths)
+    {
+        if (root is null)
+        {
+            return null;
+        }
+
+        foreach (var path in paths)
+        {
+            var token = root.SelectToken(path);
+            if (token is not null)
+            {
+                return token.ToString();
+            }
+        }
+
+        return null;
     }
 
     [Fact]
@@ -86,6 +109,18 @@ public class VariablePlaceholderNormalizationTests
     public void NormalizeVariablePlaceholders_LeavesEmptyUnchanged()
     {
         Assert.Equal("", QueryHelpers.NormalizeVariablePlaceholders(""));
+    }
+
+    [Fact]
+    public void CleanQuery_PromQLRegexVariables_DropsQuotesAroundVariables()
+    {
+        var input = "rate(http_requests_total{pod=~\"$pod\", container!~\"${container}\"}[5m])";
+        var result = QueryHelpers.CleanQuery(input, new HashSet<string>());
+
+        Assert.Contains("pod=~${pod}", result);
+        Assert.Contains("container!~${container}", result);
+        Assert.DoesNotContain("=~\"${pod}\"", result);
+        Assert.DoesNotContain("!~\"${container}\"", result);
     }
 
     [Fact]

@@ -1,0 +1,30 @@
+{
+  "grafana": {
+    "region": "eu1",
+    "folders": []
+  },
+  "coralogix": {
+    "region": "eu1",
+    "folderId": "",
+    "isLocked": false,
+    "migrateFolderStructure": false
+  },
+  "credentials": {
+    "grafanaApiKey": "glsa_replace_with_real_grafana_key",
+    "cxApiKey": "cxtp_replace_with_real_cx_key"
+  },
+  "migration": {
+    "checkpointFile": "migration-checkpoint.integration.json",
+    "reportFile": "migration-report.integration.txt",
+    "backupFile": "grafana-backup.integration.zip",
+    "maxRetries": 5,
+    "initialRetryDelaySeconds": 2,
+    "multiLuceneMerge": {
+      "allowlistedWidgetTypes": [
+        "barchart",
+        "timeseries",
+        "piechart"
+      ]
+    }
+  }
+}

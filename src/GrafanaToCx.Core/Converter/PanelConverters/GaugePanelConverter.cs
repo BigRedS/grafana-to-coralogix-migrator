@@ -1,22 +1,22 @@
+using GrafanaToCx.Core.Converter.Transformations;
+using GrafanaToCx.Core.Converter.Semantics;
 using Newtonsoft.Json.Linq;
 
 namespace GrafanaToCx.Core.Converter.PanelConverters;
 
 public sealed class GaugePanelConverter : IPanelConverter
 {
-    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics)
+    private static readonly IAggregationMapper AggregationMapper = new AggregationMapper();
+
+    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
-        var targets = panel["targets"] as JArray;
-        if (targets == null || targets.Count == 0)
+        var targets = PanelTargetSelector.ResolveVisibleTargets(panel, plan);
+        if (targets.Count == 0)
         {
             return null;
         }
 
-        var target = targets.Children<JObject>().FirstOrDefault(t => t.Value<bool?>("hide") != true);
-        if (target == null)
-        {
-            return null;
-        }
+        var target = targets[0];
 
         var defaults = panel["fieldConfig"]?["defaults"] as JObject ?? new JObject();
         var grafanaUnit = defaults.Value<string>("unit") ?? "none";
@@ -107,7 +107,7 @@ public sealed class GaugePanelConverter : IPanelConverter
     {
         var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(target.Value<string>("query") ?? string.Empty);
         var metrics = target["metrics"] as JArray ?? new JArray();
-        var aggregation = BuildElasticsearchAggregation(metrics);
+        var aggregation = AggregationMapper.MapLogsAggregation(metrics);
 
         var logsQuery = new JObject
         {
@@ -119,22 +119,6 @@ public sealed class GaugePanelConverter : IPanelConverter
             logsQuery["luceneQuery"] = new JObject { ["value"] = luceneQuery };
 
         return new JObject { ["logs"] = logsQuery };
-    }
-
-    private static JObject BuildElasticsearchAggregation(JArray metrics)
-    {
-        var first = metrics.Children<JObject>().FirstOrDefault();
-        var type = first?.Value<string>("type")?.ToLowerInvariant();
-        var field = CxFieldHelper.StripLogsFieldSuffixes(first?.Value<string>("field") ?? "");
-        return type switch
-        {
-            "count" or null => new JObject { ["count"] = new JObject() },
-            "sum"  => new JObject { ["sum"]     = new JObject { ["field"] = field } },
-            "avg"  => new JObject { ["average"] = new JObject { ["field"] = field } },
-            "min"  => new JObject { ["min"]     = new JObject { ["field"] = field } },
-            "max"  => new JObject { ["max"]     = new JObject { ["field"] = field } },
-            _      => new JObject { ["count"] = new JObject() }
-        };
     }
 
     private static double DetermineMax(double? configuredMax, string query)

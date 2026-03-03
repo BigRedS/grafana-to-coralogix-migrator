@@ -21,6 +21,7 @@ public static class AppRunner
             CommandKind.Convert => await RunConvertFromArgs(handlers, parsed),
             CommandKind.Migrate => await RunMigrateFromArgs(handlers, parsed),
             CommandKind.Verify => await RunVerifyFromArgs(handlers, parsed),
+            CommandKind.Import => await RunImportFromArgs(handlers, parsed),
             _ => await handlers.RunInteractiveConsoleAsync("migration-settings.json")
         };
     }
@@ -54,5 +55,25 @@ public static class AppRunner
         var endpoint = parsed.Get("endpoint") ?? "https://api.coralogix.com/mgmt/openapi/latest";
         var dashboardId = parsed.Get("dashboard-id");
         return await handlers.RunVerifyAsync(input, endpoint, dashboardId);
+    }
+
+    private static async Task<int> RunImportFromArgs(CommandHandlers handlers, ParsedArgs parsed)
+    {
+        var input = parsed.Get("input");
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            Console.Error.WriteLine("Error: import requires an input directory.");
+            return 1;
+        }
+
+        var cxApiKey = Environment.GetEnvironmentVariable("CX_API_KEY");
+        if (string.IsNullOrWhiteSpace(cxApiKey))
+        {
+            Console.Error.WriteLine("Error: CX_API_KEY environment variable is required for import.");
+            return 1;
+        }
+
+        var endpoint = parsed.Get("endpoint") ?? "https://api.coralogix.com/mgmt/openapi/latest";
+        return await handlers.RunImportAsync(input, endpoint, cxApiKey, interactive: false);
     }
 }

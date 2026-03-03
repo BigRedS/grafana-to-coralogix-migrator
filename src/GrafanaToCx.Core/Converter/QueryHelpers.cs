@@ -141,6 +141,10 @@ public static class QueryHelpers
         query = Regex.Replace(query, @"\[5m\]|\[1m\]|\[15m\]", "[${interval}]");
 
         query = NormalizeVariablePlaceholders(query);
+        query = Regex.Replace(query, "=~\"\\$\\{([a-zA-Z_][a-zA-Z0-9_]*)\\}\"", "=~${$1}");
+        query = Regex.Replace(query, "=~\"\\$([a-zA-Z_][a-zA-Z0-9_]*)\"", "=~${$1}");
+        query = Regex.Replace(query, "!~\"\\$\\{([a-zA-Z_][a-zA-Z0-9_]*)\\}\"", "!~${$1}");
+        query = Regex.Replace(query, "!~\"\\$([a-zA-Z_][a-zA-Z0-9_]*)\"", "!~${$1}");
 
         return query;
     }

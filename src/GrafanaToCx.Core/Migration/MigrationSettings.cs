@@ -4,7 +4,14 @@ public sealed class MigrationSettings
 {
     public GrafanaSettings Grafana { get; init; } = new();
     public CoralogixSettings Coralogix { get; init; } = new();
+    public MigrationCredentialsSettings Credentials { get; init; } = new();
     public MigrationRunSettings Migration { get; init; } = new();
+}
+
+public sealed class MigrationCredentialsSettings
+{
+    public string? GrafanaApiKey { get; init; }
+    public string? CxApiKey { get; init; }
 }
 
 public sealed class GrafanaSettings
@@ -51,4 +58,10 @@ public sealed class MigrationRunSettings
 
     public int MaxRetries { get; init; } = 5;
     public int InitialRetryDelaySeconds { get; init; } = 2;
+    public MultiLuceneMergeSettings MultiLuceneMerge { get; init; } = new();
+}
+
+public sealed class MultiLuceneMergeSettings
+{
+    public List<string> AllowlistedWidgetTypes { get; init; } = [];
 }

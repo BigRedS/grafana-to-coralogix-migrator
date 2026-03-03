@@ -1,11 +1,21 @@
 using System.Text.RegularExpressions;
 using GrafanaToCx.Core.Converter;
+using GrafanaToCx.Core.Converter.Semantics;
+using GrafanaToCx.Core.Converter.Transformations;
 using Newtonsoft.Json.Linq;
 
 namespace GrafanaToCx.Core.Converter.PanelConverters;
 
 public sealed class LineChartPanelConverter : IPanelConverter
 {
+    private readonly ILogqlToLuceneTranslator _logqlTranslator;
+    private static readonly IAggregationMapper AggregationMapper = new AggregationMapper();
+
+    public LineChartPanelConverter(ILogqlToLuceneTranslator? logqlTranslator = null)
+    {
+        _logqlTranslator = logqlTranslator ?? new LogqlToLuceneTranslator();
+    }
+
     // PromQL always has a metric name immediately before {. LogQL never does.
     private static readonly Regex PromQlMetricNameRegex =
         new(@"\b[a-zA-Z_:][a-zA-Z0-9_:]*\{", RegexOptions.Compiled);
@@ -15,10 +25,10 @@ public sealed class LineChartPanelConverter : IPanelConverter
         new(@"\b(bytes_rate|bytes_over_time|absent_over_time|count_over_time|rate|avg_over_time|min_over_time|max_over_time|first_over_time|last_over_time|quantile_over_time)\s*\(",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics)
+    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
-        var targets = panel["targets"] as JArray;
-        if (targets == null || targets.Count == 0)
+        var targets = PanelTargetSelector.ResolveVisibleTargets(panel, plan);
+        if (targets.Count == 0)
         {
             return null;
         }
@@ -27,74 +37,82 @@ public sealed class LineChartPanelConverter : IPanelConverter
         var queryDefinitions = new JArray();
         var visibleIndex = 0;
 
-        foreach (var target in targets.Children<JObject>())
+        if (TryBuildConsolidatedDataprimeQueryDefinition(panel, targets, plan, grafanaUnit, out var consolidatedDefinition))
         {
-            if (target.Value<bool?>("hide") == true)
-            {
-                continue;
-            }
-
-            var refId = target.Value<string>("refId") ?? "A";
-
-            // Elasticsearch / OpenSearch: uses query + bucketAggs + metrics (no expr field).
-            if (IsElasticsearchQuery(target))
-            {
-                var esDef = BuildElasticsearchQueryDefinition(target, refId, visibleIndex, grafanaUnit, panel);
-                if (esDef != null)
-                {
-                    queryDefinitions.Add(esDef);
-                    visibleIndex++;
-                }
-                continue;
-            }
-
-            var expr = target.Value<string>("expr");
-            if (string.IsNullOrWhiteSpace(expr))
-            {
-                continue;
-            }
-
-            if (IsLokiQuery(target, expr))
-            {
-                var logDef = BuildLogQueryDefinition(expr, refId, target, visibleIndex, grafanaUnit, panel);
-                if (logDef != null)
-                {
-                    queryDefinitions.Add(logDef);
-                    visibleIndex++;
-                }
-                continue;
-            }
-
-            var query = QueryHelpers.CleanQuery(expr, discoveredMetrics);
-            var legend = target.Value<string>("legendFormat") ?? refId;
-            var seriesName = GenerateSeriesName(legend, query, refId);
-
-            queryDefinitions.Add(new JObject
-            {
-                ["id"] = Guid.NewGuid().ToString(),
-                ["query"] = new JObject
-                {
-                    ["metrics"] = new JObject
-                    {
-                        ["promqlQuery"] = new JObject { ["value"] = query },
-                        ["filters"] = new JArray(),
-                        ["editorMode"] = "METRICS_QUERY_EDITOR_MODE_TEXT",
-                        ["seriesLimitType"] = "METRICS_SERIES_LIMIT_TYPE_BY_SERIES_COUNT"
-                    }
-                },
-                ["seriesCountLimit"] = "20",
-                ["unit"] = QueryHelpers.MapUnit(grafanaUnit),
-                ["scaleType"] = "SCALE_TYPE_LINEAR",
-                ["name"] = seriesName,
-                ["isVisible"] = true,
-                ["colorScheme"] = GetColorScheme(visibleIndex, panel),
-                ["resolution"] = new JObject { ["bucketsPresented"] = 96 },
-                ["dataModeType"] = "DATA_MODE_TYPE_HIGH_UNSPECIFIED",
-                ["customUnit"] = QueryHelpers.GetCustomUnit(grafanaUnit),
-                ["hashColors"] = false
-            });
-
+            queryDefinitions.Add(consolidatedDefinition);
             visibleIndex++;
+        }
+        else
+        {
+            foreach (var target in targets)
+            {
+                if (target.Value<bool?>("hide") == true)
+                {
+                    continue;
+                }
+
+                var refId = target.Value<string>("refId") ?? "A";
+
+                // Elasticsearch / OpenSearch: uses query + bucketAggs + metrics (no expr field).
+                if (IsElasticsearchQuery(target))
+                {
+                    var esDef = BuildElasticsearchQueryDefinition(target, refId, visibleIndex, grafanaUnit, panel);
+                    if (esDef != null)
+                    {
+                        queryDefinitions.Add(esDef);
+                        visibleIndex++;
+                    }
+                    continue;
+                }
+
+                var expr = target.Value<string>("expr");
+                if (string.IsNullOrWhiteSpace(expr))
+                {
+                    continue;
+                }
+
+                if (IsLokiQuery(target, expr))
+                {
+                    var logDef = BuildLogQueryDefinition(_logqlTranslator, expr, refId, target, visibleIndex, grafanaUnit, panel);
+                    if (logDef != null)
+                    {
+                        queryDefinitions.Add(logDef);
+                        visibleIndex++;
+                    }
+                    continue;
+                }
+
+                var query = QueryHelpers.CleanQuery(expr, discoveredMetrics);
+                var legend = target.Value<string>("legendFormat") ?? refId;
+                var seriesName = GenerateSeriesName(legend, query, refId);
+
+                queryDefinitions.Add(new JObject
+                {
+                    ["id"] = Guid.NewGuid().ToString(),
+                    ["query"] = new JObject
+                    {
+                        ["metrics"] = new JObject
+                        {
+                            ["promqlQuery"] = new JObject { ["value"] = query },
+                            ["filters"] = new JArray(),
+                            ["editorMode"] = "METRICS_QUERY_EDITOR_MODE_TEXT",
+                            ["seriesLimitType"] = "METRICS_SERIES_LIMIT_TYPE_BY_SERIES_COUNT"
+                        }
+                    },
+                    ["seriesCountLimit"] = "20",
+                    ["unit"] = QueryHelpers.MapUnit(grafanaUnit),
+                    ["scaleType"] = "SCALE_TYPE_LINEAR",
+                    ["name"] = seriesName,
+                    ["isVisible"] = true,
+                    ["colorScheme"] = GetColorScheme(visibleIndex, panel),
+                    ["resolution"] = new JObject { ["bucketsPresented"] = 96 },
+                    ["dataModeType"] = "DATA_MODE_TYPE_HIGH_UNSPECIFIED",
+                    ["customUnit"] = QueryHelpers.GetCustomUnit(grafanaUnit),
+                    ["hashColors"] = false
+                });
+
+                visibleIndex++;
+            }
         }
 
         if (queryDefinitions.Count == 0)
@@ -134,6 +152,44 @@ public sealed class LineChartPanelConverter : IPanelConverter
                 }
             }
         };
+    }
+
+    private static bool TryBuildConsolidatedDataprimeQueryDefinition(
+        JObject panel,
+        IReadOnlyList<JObject> targets,
+        TransformationPlan? plan,
+        string grafanaUnit,
+        out JObject definition)
+    {
+        definition = new JObject();
+        if (plan is not TransformationPlan.Success { ConsolidatedQueryPayload: not null } success)
+            return false;
+
+        var dataprime = success.ConsolidatedQueryPayload!["dataprime"] as JObject;
+        var text = dataprime?["dataprimeQuery"]?["text"]?.ToString();
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var dataprimeQuery = new JObject
+        {
+            ["dataprime"] = new JObject
+            {
+                ["dataprimeQuery"] = new JObject
+                {
+                    ["text"] = text
+                },
+                ["filters"] = new JArray()
+            }
+        };
+
+        var title = panel.Value<string>("title") ?? string.Empty;
+        var alias = targets.FirstOrDefault()?.Value<string>("alias");
+        var seriesName = !string.IsNullOrWhiteSpace(alias)
+            ? alias
+            : (!string.IsNullOrWhiteSpace(title) ? title : "A");
+
+        definition = BuildQueryDefinition(dataprimeQuery, 0, grafanaUnit, seriesName, panel);
+        return true;
     }
 
     private static string GenerateSeriesName(string legendFormat, string query, string refId)
@@ -199,11 +255,12 @@ public sealed class LineChartPanelConverter : IPanelConverter
     }
 
     private static JObject? BuildLogQueryDefinition(
+        ILogqlToLuceneTranslator logqlTranslator,
         string logqlExpr, string refId, JObject target,
         int visibleIndex, string grafanaUnit, JObject panel)
     {
-        var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(LogqlToLuceneConverter.Convert(logqlExpr));
-        var groupByFields = LogqlToLuceneConverter.ExtractGroupByFields(logqlExpr);
+        var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(logqlTranslator.Convert(logqlExpr));
+        var groupByFields = logqlTranslator.ExtractGroupByFields(logqlExpr);
         var aggregation = BuildLogsAggregation(logqlExpr);
 
         var legend = target.Value<string>("legendFormat") ?? refId;
@@ -211,7 +268,12 @@ public sealed class LineChartPanelConverter : IPanelConverter
 
         var logsQuery = BuildLineChartLogsQuery(luceneQuery, aggregation, groupByFields);
 
-        return BuildQueryDefinition(logsQuery, visibleIndex, grafanaUnit, seriesName, panel);
+        return BuildQueryDefinition(
+            new JObject { ["logs"] = logsQuery },
+            visibleIndex,
+            grafanaUnit,
+            seriesName,
+            panel);
     }
 
     /// <summary>
@@ -226,15 +288,10 @@ public sealed class LineChartPanelConverter : IPanelConverter
         {
             var fn = inner.Groups[1].Value.ToLowerInvariant();
             if (fn is "bytes_rate" or "bytes_over_time")
-            {
-                return new JObject
-                {
-                    ["sum"] = new JObject { ["field"] = "__size__" }
-                };
-            }
+                return new JObject { ["sum"] = new JObject { ["field"] = "__size__" } };
         }
 
-        return new JObject { ["count"] = new JObject() };
+        return AggregationMapper.MapLogsAggregation(new JArray(new JObject { ["type"] = "count" }));
     }
 
     private static bool IsElasticsearchQuery(JObject target)
@@ -276,32 +333,17 @@ public sealed class LineChartPanelConverter : IPanelConverter
 
         var logsQuery = BuildLineChartLogsQuery(luceneQuery, aggregation, groupByFields);
 
-        return BuildQueryDefinition(logsQuery, visibleIndex, grafanaUnit, seriesName, panel);
+        return BuildQueryDefinition(
+            new JObject { ["logs"] = logsQuery },
+            visibleIndex,
+            grafanaUnit,
+            seriesName,
+            panel);
     }
 
     private static JObject BuildElasticsearchAggregation(JArray metrics)
     {
-        var firstMetric = metrics.Children<JObject>().FirstOrDefault();
-        var type = firstMetric?.Value<string>("type")?.ToLowerInvariant();
-
-        return type switch
-        {
-            "count" or null => new JObject { ["count"] = new JObject() },
-            "sum"  => BuildFieldAggregation("sum",     firstMetric!),
-            "avg"  => BuildFieldAggregation("average", firstMetric!),
-            "min"  => BuildFieldAggregation("min",     firstMetric!),
-            "max"  => BuildFieldAggregation("max",     firstMetric!),
-            _      => new JObject { ["count"] = new JObject() }
-        };
-    }
-
-    private static JObject BuildFieldAggregation(string aggType, JObject metric)
-    {
-        var field = metric.Value<string>("field") ?? "";
-        return new JObject
-        {
-            [aggType] = new JObject { ["field"] = field }
-        };
+        return AggregationMapper.MapLogsAggregation(metrics);
     }
 
     /// <summary>
@@ -314,12 +356,20 @@ public sealed class LineChartPanelConverter : IPanelConverter
     private static JObject BuildLineChartLogsQuery(
         string luceneQuery, JObject aggregation, IReadOnlyList<string> groupByFields)
     {
+        var normalizedGroupFields = groupByFields
+            .Where(f => !string.IsNullOrWhiteSpace(f))
+            .ToList();
+
+        // CX rejects empty group names for logs time-series queries; default to timestamp bucket.
+        if (normalizedGroupFields.Count == 0)
+            normalizedGroupFields.Add("timestamp");
+
         var logsQuery = new JObject
         {
             ["groupBy"] = new JArray(),
             ["aggregations"] = new JArray { aggregation },
             ["filters"] = new JArray(),
-            ["groupBys"] = new JArray(groupByFields.Select(f => CxFieldHelper.ToGroupByField(f)))
+            ["groupBys"] = new JArray(normalizedGroupFields.Select(CxFieldHelper.ToGroupByField))
         };
 
         if (!string.IsNullOrWhiteSpace(luceneQuery) && luceneQuery != "*")
@@ -329,12 +379,12 @@ public sealed class LineChartPanelConverter : IPanelConverter
     }
 
     private static JObject BuildQueryDefinition(
-        JObject logsQuery, int visibleIndex, string grafanaUnit, string seriesName, JObject panel)
+        JObject query, int visibleIndex, string grafanaUnit, string seriesName, JObject panel)
     {
         return new JObject
         {
             ["id"] = Guid.NewGuid().ToString(),
-            ["query"] = new JObject { ["logs"] = logsQuery },
+            ["query"] = query,
             ["seriesCountLimit"] = "20",
             ["unit"] = QueryHelpers.MapUnit(grafanaUnit),
             ["scaleType"] = "SCALE_TYPE_LINEAR",

@@ -175,6 +175,7 @@ dotnet run --project src/GrafanaToCx.Cli
 ```
 
 From the menu you can: **Convert**, **Push**, **Import**, **Migrate**, **Settings**, **Cleanup**, or **Exit**. Push and Import are available only via interactive mode.
+Cleanup supports selecting one or multiple folders in a single run; overlapping parent/child selections are normalized to root folders before backup/delete preview and execution.
 
 ### `convert`
 
@@ -211,6 +212,12 @@ dotnet run --project src/GrafanaToCx.Cli -- migrate -s migration-settings.json -
 |---|---|
 | `-s`, `--settings` | Path to migration settings JSON (default: `migration-settings.json`) |
 | `-I`, `--interactive` | Enable Sharprompt prompts for folder mapping and conflict handling |
+
+Migration API key precedence for non-interactive `migrate` is:
+1. `GRAFANA_API_KEY` / `CX_API_KEY` environment variables
+2. `credentials.grafanaApiKey` / `credentials.cxApiKey` in the settings file
+
+If neither source provides a key, migration fails fast with a clear error.
 
 ### `import`
 
@@ -249,6 +256,10 @@ Use a JSON file (example below) with `migrate`:
     "migrateFolderStructure": true,
     "parentFolderId": ""
   },
+  "credentials": {
+    "grafanaApiKey": "",
+    "cxApiKey": ""
+  },
   "migration": {
     "checkpointFile": "migration-checkpoint.json",
     "reportFile": "migration-report.txt",
@@ -267,10 +278,14 @@ Use a JSON file (example below) with `migrate`:
 | `coralogix.isLocked` | Lock uploaded dashboards |
 | `coralogix.migrateFolderStructure` | Recreate Grafana folder structure in Coralogix |
 | `coralogix.parentFolderId` | Parent folder for newly created Coralogix folders |
+| `credentials.grafanaApiKey` | Optional Grafana API key fallback when `GRAFANA_API_KEY` is not set |
+| `credentials.cxApiKey` | Optional Coralogix API key fallback when `CX_API_KEY` is not set |
 | `migration.checkpointFile` | Checkpoint file path for resume |
 | `migration.reportFile` | Human-readable migration report path |
 | `migration.maxRetries` | Max retries per dashboard |
 | `migration.initialRetryDelaySeconds` | Initial exponential backoff delay |
+
+`migration.multiLuceneMerge.allowlistedWidgetTypes` optionally allowlists widget types for incremental multi-query Lucene merge rollout. Example widget types: `piechart`, `timeseries`, `barchart`.
 
 ---
 
@@ -289,10 +304,23 @@ Use a JSON file (example below) with `migrate`:
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `GRAFANA_API_KEY` | `migrate` | Grafana token with `Viewer` role or higher |
-| `CX_API_KEY` | `migrate` | Coralogix key with dashboard read/write permissions |
+| `GRAFANA_API_KEY` | `migrate` | First priority for Grafana API key (falls back to `credentials.grafanaApiKey`) |
+| `CX_API_KEY` | `migrate` | First priority for Coralogix API key (falls back to `credentials.cxApiKey`) |
 
 `push` and `import` get the API key from the interactive session; `verify` reads `CX_API_KEY` from the environment.
+
+## Integration Settings and Live Test
+
+- Commit-safe template: `src/GrafanaToCx.Cli/migration-settings.integration.example.json`
+- Local secret-bearing file (git-ignored): `src/GrafanaToCx.Cli/migration-settings.integration.json`
+- Point integration test to your local file with `GRAFANA_TO_CX_INTEGRATION_SETTINGS`
+
+Example:
+
+```bash
+export GRAFANA_TO_CX_INTEGRATION_SETTINGS=src/GrafanaToCx.Cli/migration-settings.integration.json
+dotnet test --filter "FullyQualifiedName~MigrationFlowIntegrationTests"
+```
 
 ---
 

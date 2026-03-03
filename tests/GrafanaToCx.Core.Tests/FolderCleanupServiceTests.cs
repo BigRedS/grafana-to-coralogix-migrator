@@ -148,6 +148,66 @@ public class FolderCleanupServiceTests
         Assert.Contains(folder.Id, foldersClient.DeletedFolderIds);
     }
 
+    [Fact]
+    public async Task CleanupAsync_MissingSelectedFolder_SkipsMissingAndProcessesRemaining()
+    {
+        var existingFolder = new CxFolderItem("folder-a", "Folder A");
+        var missingFolder = new CxFolderItem("missing-folder", "Missing Folder");
+        var dashboardsClient = new FakeDashboardsClient(new Dictionary<string, List<DashboardCatalogItem>>
+        {
+            [existingFolder.Id] = [new DashboardCatalogItem("dash-1", "Dash 1", existingFolder.Id)]
+        });
+
+        var foldersClient = new FakeFoldersClient([existingFolder]);
+        var backupService = new FakeBackupService((_, _) =>
+            new CoralogixDashboardBackupResult(1, 1, []));
+
+        var sut = new FolderCleanupService(
+            dashboardsClient,
+            foldersClient,
+            backupService,
+            NullLogger<FolderCleanupService>.Instance);
+
+        var result = await sut.CleanupAsync([missingFolder, existingFolder], "backup.zip");
+
+        Assert.True(result.BackupSucceeded);
+        Assert.Equal(1, result.SelectedFolders);
+        Assert.Equal(1, result.DeletedDashboards);
+        Assert.Equal(1, result.DeletedFolders);
+        Assert.Contains(existingFolder.Id, foldersClient.DeletedFolderIds);
+    }
+
+    [Fact]
+    public async Task CleanupAsync_ParentAndChildSelected_CanonicalizesToParentOnly()
+    {
+        var parent = new CxFolderItem("parent", "Parent");
+        var child = new CxFolderItem("child", "Child", parent.Id);
+
+        var dashboardsClient = new FakeDashboardsClient(new Dictionary<string, List<DashboardCatalogItem>>
+        {
+            [parent.Id] = [],
+            [child.Id] = [new DashboardCatalogItem("dash-1", "Dash 1", child.Id)]
+        });
+
+        var foldersClient = new FakeFoldersClient([parent, child]);
+        var backupService = new FakeBackupService((_, _) =>
+            new CoralogixDashboardBackupResult(1, 1, []));
+
+        var sut = new FolderCleanupService(
+            dashboardsClient,
+            foldersClient,
+            backupService,
+            NullLogger<FolderCleanupService>.Instance);
+
+        var result = await sut.CleanupAsync([parent, child], "backup.zip");
+
+        Assert.True(result.BackupSucceeded);
+        Assert.Equal(1, result.SelectedFolders);
+        Assert.Contains(parent.Id, foldersClient.DeletedFolderIds);
+        Assert.Contains(child.Id, foldersClient.DeletedFolderIds);
+        Assert.Equal(2, result.DeletedFolders);
+    }
+
     private sealed class FakeDashboardsClient : ICoralogixDashboardsClient
     {
         private readonly Dictionary<string, List<DashboardCatalogItem>> _itemsByFolder;

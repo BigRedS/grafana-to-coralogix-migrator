@@ -8,11 +8,22 @@
     "folderId": "",
     "isLocked": false
   },
+  "credentials": {
+    "grafanaApiKey": "",
+    "cxApiKey": ""
+  },
   "migration": {
     "checkpointFile": "migration-checkpoint.json",
     "reportFile": "migration-report.txt",
     "backupFile": "grafana-backup.zip",
     "maxRetries": 5,
-    "initialRetryDelaySeconds": 2
+    "initialRetryDelaySeconds": 2,
+    "multiLuceneMerge": {
+      "allowlistedWidgetTypes": [
+        "barchart",
+        "timeseries",
+        "piechart"
+      ]
+    }
   }
 }

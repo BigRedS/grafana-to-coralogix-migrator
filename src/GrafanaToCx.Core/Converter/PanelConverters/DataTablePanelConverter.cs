@@ -1,3 +1,5 @@
+using GrafanaToCx.Core.Converter.Transformations;
+using GrafanaToCx.Core.Converter.Semantics;
 using Newtonsoft.Json.Linq;
 
 namespace GrafanaToCx.Core.Converter.PanelConverters;
@@ -10,16 +12,15 @@ namespace GrafanaToCx.Core.Converter.PanelConverters;
 /// </summary>
 public sealed class DataTablePanelConverter : IPanelConverter
 {
-    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics)
+    private static readonly IAggregationMapper AggregationMapper = new AggregationMapper();
+
+    public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
-        var targets = panel["targets"] as JArray;
-        if (targets == null || targets.Count == 0)
+        var targets = PanelTargetSelector.ResolveVisibleTargets(panel, plan);
+        if (targets.Count == 0)
             return null;
 
-        var target = targets.Children<JObject>()
-            .FirstOrDefault(t => t.Value<bool?>("hide") != true);
-        if (target == null)
-            return null;
+        var target = targets[0];
 
         if (!IsElasticsearchTarget(target))
             return BuildFromPrometheus(panel, target, discoveredMetrics);
@@ -88,12 +89,15 @@ public sealed class DataTablePanelConverter : IPanelConverter
                 });
             }
 
-            query["grouping"] = new JObject
+            if (groupBys.Count > 0)
             {
-                ["groupBy"] = new JArray(),
-                ["groupBys"] = groupBys,
-                ["aggregations"] = aggregations
-            };
+                query["grouping"] = new JObject
+                {
+                    ["groupBy"] = new JArray(),
+                    ["groupBys"] = groupBys,
+                    ["aggregations"] = aggregations
+                };
+            }
         }
 
         return query;
@@ -101,17 +105,10 @@ public sealed class DataTablePanelConverter : IPanelConverter
 
     private static JObject? BuildLogsAggregation(JObject metric)
     {
-        var type = metric.Value<string>("type")?.ToLowerInvariant();
-        var field = CxFieldHelper.StripLogsFieldSuffixes(metric.Value<string>("field") ?? "");
-        return type switch
-        {
-            "count" or "raw_data" or null => new JObject { ["count"] = new JObject() },
-            "sum" => new JObject { ["sum"] = new JObject { ["field"] = field } },
-            "avg" => new JObject { ["average"] = new JObject { ["field"] = field } },
-            "min" => new JObject { ["min"] = new JObject { ["field"] = field } },
-            "max" => new JObject { ["max"] = new JObject { ["field"] = field } },
-            _ => null
-        };
+        var mapped = AggregationMapper.MapLogsAggregation(new JArray((JObject)metric.DeepClone()));
+        return metric.Value<string>("type")?.Equals("raw_data", StringComparison.OrdinalIgnoreCase) == true
+            ? new JObject { ["count"] = new JObject() }
+            : mapped;
     }
 
     private static JArray BuildColumns(JArray bucketAggs, JArray metrics, bool hasTermsBuckets)
