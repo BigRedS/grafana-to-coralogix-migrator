@@ -73,3 +73,6 @@ tests/e2e/.auth/
 tests/e2e/artifacts/
 tests/e2e/.env
 tests/e2e/.env.*
+playwright-report/
+test-results/
+blob-report/
