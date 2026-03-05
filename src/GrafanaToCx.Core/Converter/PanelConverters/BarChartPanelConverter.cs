@@ -103,11 +103,11 @@ public sealed class BarChartPanelConverter : IPanelConverter
             }
         }
 
-        if (groupNamesFields.Count == 0 && hasDateHistogram)
-            groupNamesFields.Add(CxFieldHelper.ToGroupByField("timestamp"));
+        if (hasDateHistogram)
+            groupNamesFields.Insert(0, CxFieldHelper.ToGroupByField("timestamp"));
 
         var aggregation = AggregationMapper.MapLogsAggregation(target["metrics"] as JArray ?? new JArray());
-        var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(target.Value<string>("query") ?? string.Empty);
+        var luceneQuery = QueryHelpers.NormalizeLuceneQuery(target.Value<string>("query") ?? string.Empty);
 
         var logsQuery = new JObject
         {

@@ -1,0 +1,11 @@
+{
+  "checkpointPath": "migration-checkpoint.json",
+  "artifactsDir": "tests/e2e/artifacts",
+  "tolerance": {
+    "absolute": 0.01,
+    "relative": 0.02
+  },
+  "dashboards": [
+    "grafana_widgets_migration_test"
+  ]
+}

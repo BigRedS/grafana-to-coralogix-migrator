@@ -20,14 +20,7 @@ public sealed class MultiTargetSemanticsPlanner : ITransformationPlanner
 
     public TransformationPlan Plan(TransformationContext context)
     {
-        var visibleTargets = context.Targets
-            .Children<JObject>()
-            .Where(t => t.Value<bool?>("hide") != true)
-            .Select((target, index) => (target, index))
-            .OrderBy(t => t.target.Value<string>("refId") ?? string.Empty, StringComparer.Ordinal)
-            .ThenBy(t => t.index)
-            .Select(t => t.target)
-            .ToList();
+        var visibleTargets = VisibleTargetSelector.Resolve(context.Targets);
 
         if (visibleTargets.Count == 0)
         {

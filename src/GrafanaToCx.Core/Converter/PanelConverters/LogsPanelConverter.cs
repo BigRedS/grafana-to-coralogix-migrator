@@ -37,7 +37,7 @@ public sealed class LogsPanelConverter : IPanelConverter
 
         var target = targets[0];
 
-        var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(ExtractLuceneQuery(target));
+        var luceneQuery = QueryHelpers.NormalizeLuceneQuery(ExtractLuceneQuery(target));
         var columns = BuildColumns(luceneQuery);
 
         var logsQuery = new JObject { ["filters"] = new JArray() };

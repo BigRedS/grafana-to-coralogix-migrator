@@ -48,7 +48,9 @@ temp/
 custom_dashboards/
 grafana_dashboards/
 grafana_test_dashboards/
-spec
+spec/*
+!spec/query-shape-contract.md
+!spec/dashboard-ui-health-investigation.md
 grafana-backup/
 test_data/
 migration-checkpoint.json
@@ -58,6 +60,7 @@ WIDGET_TYPE_COVERAGE.md
 WIDGET_TYPE_VALIDATION_REPORT.md
 cx-folder-delete-backup-*.zip
 cx-folder-delete-backup-*/
+.*backup-*.zip
 
 # .NET build artifacts
 **/bin/
@@ -65,3 +68,12 @@ cx-folder-delete-backup-*/
 publish/
 artifacts/
 src/GrafanaToCx.Cli/migration-settings.integration.json
+
+# Playwright E2E artifacts/auth
+tests/e2e/.auth/
+tests/e2e/artifacts/
+tests/e2e/.env
+tests/e2e/.env.*
+playwright-report/
+test-results/
+blob-report/
