@@ -1,0 +1,30 @@
+{
+  "name": "grafana_to_cx_custom_converter",
+  "version": "1.0.0",
+  "description": "A .NET 9 CLI tool that converts Grafana dashboards into Coralogix custom dashboard format.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "e2e:install": "playwright install",
+    "e2e:auth": "node tests/e2e/scripts/create-storage-state.mjs",
+    "e2e:test": "playwright test",
+    "e2e:headed": "playwright test --headed"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RomaLoginovskiy/grafana_to_coralogix_dashboards_converter.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/RomaLoginovskiy/grafana_to_coralogix_dashboards_converter/issues"
+  },
+  "homepage": "https://github.com/RomaLoginovskiy/grafana_to_coralogix_dashboards_converter#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2"
+  }
+}

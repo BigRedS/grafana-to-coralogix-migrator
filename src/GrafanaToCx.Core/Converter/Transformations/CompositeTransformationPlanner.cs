@@ -8,42 +8,56 @@ namespace GrafanaToCx.Core.Converter.Transformations;
 public sealed class CompositeTransformationPlanner : ITransformationPlanner
 {
     private readonly MultiTargetSemanticsPlanner _multiTargetPlanner = new();
-    private readonly PieMultiQueryConsolidationPlanner _piePlanner;
+    private readonly PieChartTransformationPlanner _pieChartPlanner;
+    private readonly TimeSeriesTransformationPlanner _timeSeriesPlanner;
+    private readonly BarChartTransformationPlanner _barChartPlanner;
+    private readonly StatusHistoryTransformationPlanner _statusHistoryPlanner;
 
     public CompositeTransformationPlanner(MultiLuceneMergeOptions mergeOptions)
     {
-        _piePlanner = new PieMultiQueryConsolidationPlanner(mergeOptions);
+        _pieChartPlanner = new PieChartTransformationPlanner(mergeOptions);
+        _timeSeriesPlanner = new TimeSeriesTransformationPlanner(mergeOptions);
+        _barChartPlanner = new BarChartTransformationPlanner(mergeOptions);
+        _statusHistoryPlanner = new StatusHistoryTransformationPlanner(mergeOptions);
     }
 
     public TransformationPlan Plan(TransformationContext context)
     {
-        var supportsConsolidation =
-            string.Equals(context.PanelType, "piechart", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(context.PanelType, "timeseries", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(context.PanelType, "barchart", StringComparison.OrdinalIgnoreCase);
-
-        if (supportsConsolidation)
+        if (string.Equals(context.PanelType, "barchart", StringComparison.OrdinalIgnoreCase))
         {
-            var isBarChart = string.Equals(context.PanelType, "barchart", StringComparison.OrdinalIgnoreCase);
-            var consolidationPlan = _piePlanner.Plan(context);
-            if (consolidationPlan is TransformationPlan.Failure)
-                return consolidationPlan;
-
-            if (!isBarChart)
-                return consolidationPlan;
-
-            if (consolidationPlan is TransformationPlan.Success
+            var barPlan = _barChartPlanner.Plan(context);
+            if (barPlan is TransformationPlan.Success
                 {
-                    ConsolidatedQueryPayload: not null
-                } consolidatedSuccess)
+                    ConsolidatedQueryPayload: null,
+                    Decision: null
+                })
             {
-                return consolidatedSuccess;
+                return _multiTargetPlanner.Plan(context);
             }
 
-            if (isBarChart && consolidationPlan is TransformationPlan.Success { Decision: not null } skippedWithReason)
-                return skippedWithReason;
+            return barPlan;
         }
 
-        return _multiTargetPlanner.Plan(context);
+        if (string.Equals(context.PanelType, "status-history", StringComparison.OrdinalIgnoreCase))
+        {
+            var statusPlan = _statusHistoryPlanner.Plan(context);
+            if (statusPlan is TransformationPlan.Success
+                {
+                    ConsolidatedQueryPayload: null,
+                    Decision: null
+                })
+            {
+                return _multiTargetPlanner.Plan(context);
+            }
+
+            return statusPlan;
+        }
+
+        return context.PanelType.ToLowerInvariant() switch
+        {
+            "piechart" => _pieChartPlanner.Plan(context),
+            "timeseries" => _timeSeriesPlanner.Plan(context),
+            _ => _multiTargetPlanner.Plan(context)
+        };
     }
 }

@@ -22,8 +22,29 @@
       "allowlistedWidgetTypes": [
         "barchart",
         "timeseries",
-        "piechart"
+        "piechart",
+        "status-history"
       ]
+    }
+  },
+  "Serilog": {
+    "MinimumLevel": "Information",
+    "WriteTo": {
+      "File": {
+        "Enabled": true,
+        "Path": "logs/grafana-to-cx-.json",
+        "RollingInterval": "Day",
+        "Formatter": "Json"
+      },
+      "Otlp": {
+        "Enabled": true,
+        "Endpoint": "http://localhost:4317",
+        "Protocol": "Grpc"
+      }
+    },
+    "Enrich": [ "FromLogContext" ],
+    "Properties": {
+      "Service": "grafana-to-cx-cli"
     }
   }
 }

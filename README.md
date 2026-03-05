@@ -324,6 +324,63 @@ dotnet test --filter "FullyQualifiedName~MigrationFlowIntegrationTests"
 
 ---
 
+## Playwright Migration Validation (Grafana vs Coralogix)
+
+End-to-end migration checks are implemented under `tests/e2e` and validate:
+
+- zero visible error tolerance on both platforms,
+- data presence on both dashboards,
+- tolerance-based numeric comparison for matched panel titles.
+
+Investigation evidence and selector catalog are documented in:
+
+- `spec/dashboard-ui-health-investigation.md`
+
+### 1) Install Playwright tooling
+
+```bash
+npm install
+npm run e2e:install
+```
+
+### 2) Create one-time auth storage state
+
+```bash
+npm run e2e:auth
+```
+
+This opens a headed browser. Complete login manually, then press Enter in terminal to save:
+
+- `tests/e2e/.auth/storage-state.json`
+
+### 3) Configure dashboards by name
+
+Edit:
+
+- `tests/e2e/dashboard-selection.json`
+
+Set `dashboards` to Grafana dashboard titles you want to validate. Names are resolved against `migration-checkpoint.json` and must map to unique `Completed` entries.
+
+### 4) Run migration comparison tests
+
+```bash
+npm run e2e:test
+```
+
+For interactive debugging:
+
+```bash
+npm run e2e:headed
+```
+
+Failure artifacts are written to:
+
+- `tests/e2e/artifacts/<dashboard-name>/comparison.json`
+- `tests/e2e/artifacts/<dashboard-name>/grafana.png`
+- `tests/e2e/artifacts/<dashboard-name>/coralogix.png`
+
+---
+
 ## Troubleshooting
 
 - `dotnet: command not found`: install .NET 9 SDK and restart terminal.

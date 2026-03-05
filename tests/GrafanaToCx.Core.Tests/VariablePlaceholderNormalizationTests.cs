@@ -112,6 +112,19 @@ public class VariablePlaceholderNormalizationTests
     }
 
     [Fact]
+    public void NormalizeLuceneQuery_StripsKeywordFieldSuffixes_AndPreservesQuotedValues()
+    {
+        var input =
+            "app:EmailVerificationV2 AND emailVerification.queue.keyword:$queue AND message:\"emailVerification.queue.keyword:${queue}\" AND name.keyword:\"VerificationComplete\"";
+
+        var result = QueryHelpers.NormalizeLuceneQuery(input);
+
+        Assert.Equal(
+            "app:EmailVerificationV2 AND emailVerification.queue:${queue} AND message:\"emailVerification.queue.keyword:${queue}\" AND name:\"VerificationComplete\"",
+            result);
+    }
+
+    [Fact]
     public void CleanQuery_PromQLRegexVariables_DropsQuotesAroundVariables()
     {
         var input = "rate(http_requests_total{pod=~\"$pod\", container!~\"${container}\"}[5m])";
@@ -153,8 +166,46 @@ public class VariablePlaceholderNormalizationTests
         Assert.NotNull(luceneQuery);
         Assert.Contains("${sender_domain}", luceneQuery);
         Assert.Contains("${ip}", luceneQuery);
+        Assert.Contains("emailVerification.senderDomain:${sender_domain}", luceneQuery);
+        Assert.Contains("emailVerification.ip:${ip}", luceneQuery);
+        Assert.DoesNotContain(".keyword:", luceneQuery);
         Assert.DoesNotContain(":$sender_domain", luceneQuery);
         Assert.DoesNotContain(":$ip ", luceneQuery);
+    }
+
+    [Fact]
+    public void DataTable_ES_LogsQuery_VerificationResultsLikeQuery_StripsKeywordFromMultipleFields()
+    {
+        var converter = CreateConverter();
+        var panel = new JObject
+        {
+            ["id"] = 2,
+            ["title"] = "Verification Results",
+            ["type"] = "table",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] =
+                        "app:EmailVerificationV2 AND name:VerificationComplete AND emailVerification.queue.keyword:$queue AND emailVerification.senderDomain.keyword:$sender_domain",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray(),
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var luceneQuery = GetLuceneQuery(widget);
+        Assert.NotNull(luceneQuery);
+        Assert.Contains("emailVerification.queue:${queue}", luceneQuery);
+        Assert.Contains("emailVerification.senderDomain:${sender_domain}", luceneQuery);
+        Assert.DoesNotContain("emailVerification.queue.keyword", luceneQuery);
+        Assert.DoesNotContain("emailVerification.senderDomain.keyword", luceneQuery);
     }
 
     [Fact]

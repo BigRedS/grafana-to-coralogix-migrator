@@ -112,6 +112,87 @@ public static class QueryHelpers
         });
     }
 
+    /// <summary>
+    /// Normalizes Lucene queries for Coralogix logs paths:
+    /// 1) normalizes Grafana variable placeholders ($x -> ${x})
+    /// 2) strips terminal .keyword from field names in predicate keys (field.keyword:value -> field:value)
+    /// Quoted predicate values are left unchanged.
+    /// </summary>
+    public static string NormalizeLuceneQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return query ?? string.Empty;
+
+        var normalizedVariables = NormalizeVariablePlaceholders(query);
+        return StripKeywordSuffixFromLuceneFieldNames(normalizedVariables);
+    }
+
+    private static string StripKeywordSuffixFromLuceneFieldNames(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return query;
+
+        const string keywordSuffix = ".keyword";
+        var replacements = new List<int>();
+        var inQuotes = false;
+
+        for (var i = 0; i < query.Length; i++)
+        {
+            if (query[i] == '"' && !IsEscaped(query, i))
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (inQuotes || query[i] != ':')
+                continue;
+
+            var fieldEnd = i - 1;
+            while (fieldEnd >= 0 && char.IsWhiteSpace(query[fieldEnd]))
+                fieldEnd--;
+
+            if (fieldEnd < 0)
+                continue;
+
+            var fieldStart = fieldEnd;
+            while (fieldStart >= 0 && IsLuceneFieldCharacter(query[fieldStart]))
+                fieldStart--;
+            fieldStart++;
+
+            if (fieldStart > fieldEnd)
+                continue;
+
+            var field = query[fieldStart..(fieldEnd + 1)];
+            if (field.Length <= keywordSuffix.Length || !field.EndsWith(keywordSuffix, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            replacements.Add(fieldEnd - keywordSuffix.Length + 1);
+        }
+
+        if (replacements.Count == 0)
+            return query;
+
+        var builder = new System.Text.StringBuilder(query);
+        for (var i = replacements.Count - 1; i >= 0; i--)
+            builder.Remove(replacements[i], keywordSuffix.Length);
+
+        return builder.ToString();
+    }
+
+    private static bool IsLuceneFieldCharacter(char c)
+    {
+        return char.IsLetterOrDigit(c) || c is '_' or '.' or '@' or '$';
+    }
+
+    private static bool IsEscaped(string text, int index)
+    {
+        var slashCount = 0;
+        for (var i = index - 1; i >= 0 && text[i] == '\\'; i--)
+            slashCount++;
+
+        return slashCount % 2 == 1;
+    }
+
     public static string CleanQuery(string query, ISet<string> discoveredMetrics)
     {
         if (string.IsNullOrWhiteSpace(query))

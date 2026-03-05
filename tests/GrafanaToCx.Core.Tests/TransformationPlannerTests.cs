@@ -101,6 +101,101 @@ public class TransformationPlannerTests
     }
 
     [Fact]
+    public void PieChart_Allowlisted_WithDateHistogram_DoesNotIncludeTimestampGrouping()
+    {
+        var converter = CreateConverter("piechart");
+        var panel = new JObject
+        {
+            ["id"] = 16,
+            ["title"] = "Pie Histogram Ignored",
+            ["type"] = "piechart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "app:foo AND payload.isEmail:true",
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"] = "date_histogram",
+                            ["field"] = "@timestamp",
+                            ["settings"] = new JObject { ["interval"] = "1m" }
+                        },
+                        new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" }
+                    },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["query"] = "app:foo AND payload.isEmail:false",
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"] = "date_histogram",
+                            ["field"] = "@timestamp",
+                            ["settings"] = new JObject { ["interval"] = "1m" }
+                        },
+                        new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" }
+                    },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var dataPrime = widget["definition"]?["pieChart"]?["query"]?["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
+        Assert.NotNull(dataPrime);
+        Assert.Contains("groupby payload.isEmail agg count()", dataPrime);
+        Assert.DoesNotContain("$m.timestamp /", dataPrime);
+    }
+
+    [Fact]
+    public void PieChart_Allowlisted_EscapedQuotedPredicate_ConsolidatesToDataPrime()
+    {
+        var converter = CreateConverter("piechart");
+        var panel = new JObject
+        {
+            ["id"] = 15,
+            ["title"] = "Escaped Quoted Pie",
+            ["type"] = "piechart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "applicationName.keyword:\\\"domain-engine-requests-producer\\\" AND payload.path.keyword:\\\"/v1/domain-engine/requests\\\" AND payload.isEmail:true",
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["query"] = "applicationName.keyword:\\\"domain-engine-requests-producer\\\" AND payload.path.keyword:\\\"/v1/domain-engine/requests\\\" AND payload.isEmail:false",
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var query = widget["definition"]?["pieChart"]?["query"] as JObject;
+        Assert.NotNull(query);
+        Assert.NotNull(query!["dataprime"]);
+        Assert.Null(query["logs"]);
+        Assert.Contains(converter.ConversionDiagnostics, d => d.PanelTitle == "Escaped Quoted Pie" && d.Code == "DGR-LMG-000");
+    }
+
+    [Fact]
     public void PieChart_NotAllowlisted_SkipsMergeAndFallsBackToSingleTarget()
     {
         var converter = CreateConverter();
@@ -294,6 +389,45 @@ public class TransformationPlannerTests
         Assert.NotNull(query);
         Assert.NotNull(query["logs"]);
         Assert.Contains(converter.ConversionDiagnostics, d => d.PanelTitle == "Aggregation Mismatch Pie" && d.Code == "DGR-LMG-005");
+    }
+
+    [Fact]
+    public void PieChart_Allowlisted_AggregationRequiresField_SkipsMerge()
+    {
+        var converter = CreateConverter("piechart");
+        var panel = new JObject
+        {
+            ["id"] = 7,
+            ["title"] = "Aggregation Field Missing Pie",
+            ["type"] = "piechart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "payload.isEmail:true",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "sum" } }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["query"] = "payload.isEmail:false",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.isEmail" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "sum" } }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+        var query = widget["definition"]?["pieChart"]?["query"] as JObject;
+        Assert.NotNull(query);
+        Assert.NotNull(query["logs"]);
+        Assert.Contains(converter.ConversionDiagnostics, d => d.PanelTitle == "Aggregation Field Missing Pie" && d.Code == "DGR-LMG-006");
     }
 
     [Fact]
@@ -754,6 +888,161 @@ public class TransformationPlannerTests
     }
 
     [Fact]
+    public void BarChart_Allowlisted_AutoInterval_UsesSuggestedIntervalPlaceholder()
+    {
+        var converter = CreateConverter("barchart");
+        var panel = new JObject
+        {
+            ["id"] = 216,
+            ["title"] = "Bar Auto Interval",
+            ["type"] = "barchart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "service:payments",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"] = "date_histogram",
+                            ["field"] = "@timestamp",
+                            ["settings"] = new JObject { ["interval"] = "auto" }
+                        }
+                    },
+                    ["metrics"] = new JArray
+                    {
+                        new JObject { ["type"] = "count" }
+                    }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var dataPrime = widget["definition"]?["barChart"]?["query"]?["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
+        Assert.NotNull(dataPrime);
+        Assert.Contains("groupby $m.timestamp / $p.timeRange.suggestedInterval", dataPrime);
+        Assert.DoesNotContain("groupby $m.timestamp / auto", dataPrime);
+    }
+
+    [Fact]
+    public void BarChart_Allowlisted_DateHistogramAndTerms_ConsolidatesToDataPrimeWithTimestampAndTermsGroupBy()
+    {
+        var converter = CreateConverter("barchart");
+        var panel = new JObject
+        {
+            ["id"] = 213,
+            ["title"] = "Bar Terms Grouping Merge",
+            ["type"] = "barchart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["alias"] = "success",
+                    ["query"] = "app:DomainEngineRequestsProducer AND env:prod",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"] = "date_histogram",
+                            ["field"] = "@timestamp",
+                            ["settings"] = new JObject { ["interval"] = "1m" }
+                        },
+                        new JObject { ["type"] = "terms", ["field"] = "payload.status.keyword" },
+                        new JObject { ["type"] = "terms", ["field"] = "payload.region.keyword" }
+                    },
+                    ["metrics"] = new JArray
+                    {
+                        new JObject { ["type"] = "sum", ["field"] = "payload.successCount.keyword" }
+                    }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["alias"] = "failed",
+                    ["query"] = "app:DomainEngineRequestsProducer AND env:prod",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"] = "date_histogram",
+                            ["field"] = "@timestamp",
+                            ["settings"] = new JObject { ["interval"] = "1m" }
+                        },
+                        new JObject { ["type"] = "terms", ["field"] = "payload.status.keyword" },
+                        new JObject { ["type"] = "terms", ["field"] = "payload.region.keyword" }
+                    },
+                    ["metrics"] = new JArray
+                    {
+                        new JObject { ["type"] = "sum", ["field"] = "payload.failedCount.keyword" }
+                    }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var dataPrime = widget["definition"]?["barChart"]?["query"]?["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
+        Assert.NotNull(dataPrime);
+        Assert.Contains("groupby $m.timestamp / 1m, payload.status, payload.region", dataPrime);
+    }
+
+    [Fact]
+    public void BarChart_Allowlisted_SingleTarget_DateHistogramAndTerms_ConsolidatesToDataPrime()
+    {
+        var converter = CreateConverter("barchart");
+        var panel = new JObject
+        {
+            ["id"] = 214,
+            ["title"] = "Bar Single Target DataPrime",
+            ["type"] = "barchart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "app:DomainEngineResultsProducer AND env:prod",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"] = "date_histogram",
+                            ["field"] = "@timestamp",
+                            ["settings"] = new JObject { ["interval"] = "1d" }
+                        },
+                        new JObject { ["type"] = "terms", ["field"] = "payload.status.keyword" }
+                    },
+                    ["metrics"] = new JArray
+                    {
+                        new JObject { ["type"] = "sum", ["field"] = "payload.count.keyword" }
+                    }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var query = widget["definition"]?["barChart"]?["query"] as JObject;
+        Assert.NotNull(query);
+        Assert.NotNull(query!["dataprime"]);
+        Assert.Null(query["logs"]);
+        Assert.Contains(converter.ConversionDiagnostics, d => d.PanelTitle == "Bar Single Target DataPrime" && d.Code == "DGR-BMG-010");
+    }
+
+    [Fact]
     public void BarChart_Allowlisted_MetricVariation_EscapedQuotedPredicateMismatch_SkipsMerge()
     {
         var converter = CreateConverter("barchart");
@@ -935,6 +1224,52 @@ public class TransformationPlannerTests
     }
 
     [Fact]
+    public void BarChart_LogsFallback_DateHistogramAndTerms_UsesTimestampThenTermsGrouping()
+    {
+        var converter = CreateConverter();
+        var panel = new JObject
+        {
+            ["id"] = 215,
+            ["title"] = "Bar Fallback Timestamp And Terms",
+            ["type"] = "barchart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "app:DomainEngineResultsProducer AND env:prod",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject
+                        {
+                            ["type"] = "date_histogram",
+                            ["field"] = "@timestamp",
+                            ["settings"] = new JObject { ["interval"] = "1d" }
+                        },
+                        new JObject { ["type"] = "terms", ["field"] = "payload.status.keyword" }
+                    },
+                    ["metrics"] = new JArray
+                    {
+                        new JObject { ["type"] = "sum", ["field"] = "payload.count.keyword" }
+                    }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var groupNamesFields = widget["definition"]?["barChart"]?["query"]?["logs"]?["groupNamesFields"] as JArray;
+        Assert.NotNull(groupNamesFields);
+        Assert.Equal(2, groupNamesFields!.Count);
+        Assert.Equal("timestamp", groupNamesFields[0]?["keypath"]?[0]?.ToString());
+        Assert.Equal("payload", groupNamesFields[1]?["keypath"]?[0]?.ToString());
+        Assert.Equal("status", groupNamesFields[1]?["keypath"]?[1]?.ToString());
+    }
+
+    [Fact]
     public void BarChart_Allowlisted_MetricTypeMismatch_SkipsMergeWithDeterministicDiagnostic()
     {
         var converter = CreateConverter("barchart");
@@ -996,6 +1331,60 @@ public class TransformationPlannerTests
         Assert.Null(query["dataprime"]);
 
         Assert.Contains(converter.ConversionDiagnostics, d => d.PanelTitle == "Bar Merge Mismatch" && d.Code == "DGR-BMG-005");
+    }
+
+    [Fact]
+    public void BarChart_Allowlisted_MissingDateHistogram_SkipsMergeWithDeterministicDiagnostic()
+    {
+        var converter = CreateConverter("barchart");
+        var panel = new JObject
+        {
+            ["id"] = 205,
+            ["title"] = "Bar Missing Histogram",
+            ["type"] = "barchart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "app:DomainEngineRequestsProducer AND env:prod",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject { ["type"] = "terms", ["field"] = "payload.outcome.keyword" }
+                    },
+                    ["metrics"] = new JArray
+                    {
+                        new JObject { ["type"] = "sum", ["field"] = "payload.successCount.keyword" }
+                    }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["query"] = "app:DomainEngineRequestsProducer AND env:prod",
+                    ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                    ["bucketAggs"] = new JArray
+                    {
+                        new JObject { ["type"] = "terms", ["field"] = "payload.outcome.keyword" }
+                    },
+                    ["metrics"] = new JArray
+                    {
+                        new JObject { ["type"] = "sum", ["field"] = "payload.failedCount.keyword" }
+                    }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var query = widget["definition"]?["barChart"]?["query"] as JObject;
+        Assert.NotNull(query);
+        Assert.NotNull(query!["logs"]);
+        Assert.Null(query["dataprime"]);
+
+        Assert.Contains(converter.ConversionDiagnostics, d => d.PanelTitle == "Bar Missing Histogram" && d.Code == "DGR-BMG-004");
     }
 
     private static GrafanaToCxConverter CreateConverter(params string[] allowlistedWidgetTypes) =>

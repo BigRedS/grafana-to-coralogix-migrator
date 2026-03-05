@@ -90,7 +90,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
         }
 
         var aggregation = AggregationMapper.MapLogsAggregation(target["metrics"] as JArray ?? new JArray());
-        var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(target.Value<string>("query") ?? string.Empty);
+        var luceneQuery = QueryHelpers.NormalizeLuceneQuery(target.Value<string>("query") ?? string.Empty);
 
         var logsQuery = new JObject
         {

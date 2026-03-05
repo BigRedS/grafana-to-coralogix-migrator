@@ -105,7 +105,7 @@ public sealed class GaugePanelConverter : IPanelConverter
 
     private static JObject BuildLogsQuery(JObject target)
     {
-        var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(target.Value<string>("query") ?? string.Empty);
+        var luceneQuery = QueryHelpers.NormalizeLuceneQuery(target.Value<string>("query") ?? string.Empty);
         var metrics = target["metrics"] as JArray ?? new JArray();
         var aggregation = AggregationMapper.MapLogsAggregation(metrics);
 

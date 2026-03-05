@@ -1,4 +1,5 @@
 using GrafanaToCx.Core.Converter;
+using GrafanaToCx.Core.Converter.Transformations;
 using GrafanaToCx.Core.Migration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json.Linq;
@@ -237,6 +238,106 @@ public class UnitTest1
         Assert.Contains("B", reductionDiagnostic.DroppedSemantics ?? []);
     }
 
+    [Fact]
+    public void StatusHistory_Allowlisted_UsesBarChartDataPrimeQuery()
+    {
+        var converter = CreateConverter("status-history");
+        var result = converter.ConvertToJObject(
+            BuildDashboardJson(new JObject
+            {
+                ["id"] = 7,
+                ["title"] = "Status History DataPrime",
+                ["type"] = "status-history",
+                ["targets"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["refId"] = "A",
+                        ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                        ["query"] = "service:payments",
+                        ["bucketAggs"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["type"] = "date_histogram",
+                                ["field"] = "@timestamp",
+                                ["settings"] = new JObject { ["interval"] = "1m" }
+                            },
+                            new JObject
+                            {
+                                ["type"] = "terms",
+                                ["field"] = "status.keyword"
+                            }
+                        },
+                        ["metrics"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["id"] = "1",
+                                ["type"] = "count"
+                            }
+                        }
+                    }
+                }
+            }));
+
+        var widgets = ExtractWidgets(result);
+        Assert.Single(widgets);
+        var query = widgets[0]["definition"]?["barChart"]?["query"] as JObject;
+        Assert.NotNull(query);
+        Assert.NotNull(query!["dataprime"]);
+        Assert.Null(query["logs"]);
+        Assert.Contains(
+            converter.ConversionDiagnostics,
+            d => d.PanelType == "status-history" && d.Code == "DGR-STH-003");
+    }
+
+    [Fact]
+    public void StatusHistory_Allowlisted_AutoInterval_UsesSuggestedIntervalPlaceholder()
+    {
+        var converter = CreateConverter("status-history");
+        var result = converter.ConvertToJObject(
+            BuildDashboardJson(new JObject
+            {
+                ["id"] = 8,
+                ["title"] = "Status History Auto Interval",
+                ["type"] = "status-history",
+                ["targets"] = new JArray
+                {
+                    new JObject
+                    {
+                        ["refId"] = "A",
+                        ["datasource"] = new JObject { ["type"] = "elasticsearch" },
+                        ["query"] = "service:payments",
+                        ["bucketAggs"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["type"] = "date_histogram",
+                                ["field"] = "@timestamp",
+                                ["settings"] = new JObject { ["interval"] = "auto" }
+                            }
+                        },
+                        ["metrics"] = new JArray
+                        {
+                            new JObject
+                            {
+                                ["id"] = "1",
+                                ["type"] = "count"
+                            }
+                        }
+                    }
+                }
+            }));
+
+        var widgets = ExtractWidgets(result);
+        Assert.Single(widgets);
+        var dataPrime = widgets[0]["definition"]?["barChart"]?["query"]?["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
+        Assert.NotNull(dataPrime);
+        Assert.Contains("groupby $m.timestamp / $p.timeRange.suggestedInterval", dataPrime);
+        Assert.DoesNotContain("groupby $m.timestamp / auto", dataPrime);
+    }
+
     [Theory]
     [InlineData("stat", "gauge")]
     [InlineData("bargauge", "gauge")]
@@ -336,6 +437,9 @@ public class UnitTest1
 
     private static GrafanaToCxConverter CreateConverter() =>
         new(NullLogger<GrafanaToCxConverter>.Instance);
+
+    private static GrafanaToCxConverter CreateConverter(params string[] allowlistedWidgetTypes) =>
+        new(NullLogger<GrafanaToCxConverter>.Instance, new MultiLuceneMergeOptions(allowlistedWidgetTypes));
 
     private static string BuildDashboardJson(JObject panel)
     {

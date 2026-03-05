@@ -59,9 +59,7 @@ public sealed class VariableConverter
             return null;
         }
 
-        var queryDef = varToken["query"]?.Type == JTokenType.Object
-            ? varToken["query"]?["query"]?.ToString() ?? string.Empty
-            : varToken["query"]?.ToString() ?? string.Empty;
+        var queryDef = ExtractQueryDefinition(varToken["query"]);
 
         if (queryDef.Contains("metrics(", StringComparison.OrdinalIgnoreCase))
         {
@@ -588,5 +586,23 @@ public sealed class VariableConverter
         }
 
         return values.Count > 0;
+    }
+
+    private static string ExtractQueryDefinition(JToken? queryToken)
+    {
+        if (queryToken is not JObject queryObject)
+        {
+            return queryToken?.ToString() ?? string.Empty;
+        }
+
+        var nestedQuery = queryObject.Value<string>("query");
+        if (!string.IsNullOrWhiteSpace(nestedQuery))
+        {
+            return nestedQuery;
+        }
+
+        // Grafana Elasticsearch variables may store terms definition directly
+        // under the query object ({ find, field, ... }) without nested "query".
+        return queryObject.ToString();
     }
 }

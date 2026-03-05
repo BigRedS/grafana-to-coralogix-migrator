@@ -156,4 +156,32 @@ public class VariableConverterTests
 
         Assert.Null(convertedVariable);
     }
+
+    [Fact]
+    public void ConvertToJObject_ElasticsearchTermsQueryObject_PreservesInstanceUrlVariable()
+    {
+        var converter = CreateConverter();
+        var grafanaVariable = new JObject
+        {
+            ["name"] = "instanceUrl",
+            ["type"] = "query",
+            ["datasource"] = new JObject
+            {
+                ["type"] = "elasticsearch",
+                ["uid"] = "es-main"
+            },
+            ["query"] = new JObject
+            {
+                ["find"] = "terms",
+                ["field"] = "instanceUrl.keyword"
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJsonWithVariables(grafanaVariable));
+        var convertedVariable = GetVariable(result, "instanceUrl");
+
+        Assert.NotNull(convertedVariable);
+        Assert.Equal("VARIABLE_DISPLAY_TYPE_V2_LABEL_VALUE", convertedVariable!["displayType"]?.ToString());
+        Assert.NotNull(convertedVariable["source"]?["query"]?["logsQuery"]?["type"]?["fieldValue"]);
+    }
 }

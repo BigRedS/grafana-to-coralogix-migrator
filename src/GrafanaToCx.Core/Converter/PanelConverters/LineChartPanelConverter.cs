@@ -259,7 +259,7 @@ public sealed class LineChartPanelConverter : IPanelConverter
         string logqlExpr, string refId, JObject target,
         int visibleIndex, string grafanaUnit, JObject panel)
     {
-        var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(logqlTranslator.Convert(logqlExpr));
+        var luceneQuery = QueryHelpers.NormalizeLuceneQuery(logqlTranslator.Convert(logqlExpr));
         var groupByFields = logqlTranslator.ExtractGroupByFields(logqlExpr);
         var aggregation = BuildLogsAggregation(logqlExpr);
 
@@ -308,7 +308,7 @@ public sealed class LineChartPanelConverter : IPanelConverter
     private static JObject? BuildElasticsearchQueryDefinition(
         JObject target, string refId, int visibleIndex, string grafanaUnit, JObject panel)
     {
-        var luceneQuery = QueryHelpers.NormalizeVariablePlaceholders(target.Value<string>("query") ?? string.Empty);
+        var luceneQuery = QueryHelpers.NormalizeLuceneQuery(target.Value<string>("query") ?? string.Empty);
 
         // Extract group-by fields from terms bucketAggs (date_histogram is the time axis, skip it).
         var groupByFields = new List<string>();
