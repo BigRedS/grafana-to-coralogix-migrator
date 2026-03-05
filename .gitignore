@@ -60,6 +60,7 @@ WIDGET_TYPE_COVERAGE.md
 WIDGET_TYPE_VALIDATION_REPORT.md
 cx-folder-delete-backup-*.zip
 cx-folder-delete-backup-*/
+.*backup-*.zip
 
 # .NET build artifacts
 **/bin/
