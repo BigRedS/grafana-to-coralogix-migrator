@@ -54,7 +54,9 @@ spec/*
 grafana-backup/
 test_data/
 migration-checkpoint.json
+migration-checkpoint.integration.json
 migration-report.txt
+migration-report.integration.txt
 grafana-backup.zip
 WIDGET_TYPE_COVERAGE.md
 WIDGET_TYPE_VALIDATION_REPORT.md
