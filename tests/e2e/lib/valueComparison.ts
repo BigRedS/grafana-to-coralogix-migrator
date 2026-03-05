@@ -11,6 +11,9 @@ export function compareDashboardValues(
 
   const results: ComparisonResult[] = [];
   let comparableCount = 0;
+  const grafanaHasNumericValues = grafana.panels.some((panel) =>
+    panel.numericValues.some((value) => typeof value === "number" && Number.isFinite(value))
+  );
 
   for (const grafanaPanel of grafana.panels) {
     const key = normalizePanelName(grafanaPanel.panelName);
@@ -38,7 +41,7 @@ export function compareDashboardValues(
     });
   }
 
-  if (comparableCount === 0) {
+  if (comparableCount === 0 && grafanaHasNumericValues) {
     results.push({
       panelName: "__no_comparable_panels__",
       grafanaValue: Number.NaN,

@@ -196,6 +196,95 @@ public class TransformationPlannerTests
     }
 
     [Fact]
+    public void PieChart_Allowlisted_InvalidVaryingGroupByField_FallsBackToSingleTargetWithDiagnostic()
+    {
+        var converter = CreateConverter("piechart");
+        var panel = new JObject
+        {
+            ["id"] = 17,
+            ["title"] = "Invalid Group By Fallback Pie",
+            ["type"] = "piechart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "app:foo AND .keyword:true",
+                    ["bucketAggs"] = new JArray(),
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["query"] = "app:foo AND .keyword:false",
+                    ["bucketAggs"] = new JArray(),
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var query = widget["definition"]?["pieChart"]?["query"] as JObject;
+        Assert.NotNull(query);
+        Assert.NotNull(query!["logs"]);
+        Assert.Null(query["dataprime"]);
+        Assert.Contains(converter.ConversionDiagnostics, d => d.PanelTitle == "Invalid Group By Fallback Pie" && d.Code == "DGR-LMG-011");
+    }
+
+    [Fact]
+    public void PieChart_Allowlisted_ConsistentTermsBucket_DrivesConsolidatedGroupBy()
+    {
+        var converter = CreateConverter("piechart");
+        var panel = new JObject
+        {
+            ["id"] = 18,
+            ["title"] = "Terms Driven Group By Pie",
+            ["type"] = "piechart",
+            ["targets"] = new JArray
+            {
+                new JObject
+                {
+                    ["refId"] = "A",
+                    ["query"] = "app:foo AND payload.isEmail:true",
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.channel.keyword" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                },
+                new JObject
+                {
+                    ["refId"] = "B",
+                    ["query"] = "app:foo AND payload.isEmail:false",
+                    ["bucketAggs"] = new JArray { new JObject { ["type"] = "terms", ["field"] = "payload.channel.keyword" } },
+                    ["metrics"] = new JArray { new JObject { ["type"] = "count" } }
+                }
+            }
+        };
+
+        var result = converter.ConvertToJObject(BuildDashboardJson(panel));
+        var widget = GetFirstWidget(result);
+        Assert.NotNull(widget);
+
+        var query = widget["definition"]?["pieChart"]?["query"] as JObject;
+        Assert.NotNull(query);
+        Assert.NotNull(query!["dataprime"]);
+        Assert.Null(query["logs"]);
+
+        var dataPrime = query["dataprime"]?["dataprimeQuery"]?["text"]?.ToString();
+        Assert.NotNull(dataPrime);
+        Assert.Contains("groupby payload.channel agg count()", dataPrime);
+        Assert.DoesNotContain("groupby payload.isEmail agg count()", dataPrime);
+
+        var groupNames = query["dataprime"]?["groupNames"] as JArray;
+        Assert.NotNull(groupNames);
+        Assert.Single(groupNames!);
+        Assert.Equal("payload.channel", groupNames[0]?.ToString());
+
+        Assert.Contains(converter.ConversionDiagnostics, d => d.PanelTitle == "Terms Driven Group By Pie" && d.Code == "DGR-LMG-000");
+    }
+
+    [Fact]
     public void PieChart_NotAllowlisted_SkipsMergeAndFallsBackToSingleTarget()
     {
         var converter = CreateConverter();

@@ -37,6 +37,10 @@ public sealed class GrafanaClient : IGrafanaClient, IDisposable
                 item.Value<string>("title") ?? string.Empty))
             .ToList();
 
+        // Grafana's api/folders endpoint never returns the General (root) folder (ID 0).
+        // Synthesize it so it participates in filtering and dashboard discovery.
+        folders.Insert(0, new GrafanaFolder(0, string.Empty, "General"));
+
         if (folderFilter.Count > 0)
         {
             var filter = new HashSet<string>(folderFilter, StringComparer.OrdinalIgnoreCase);

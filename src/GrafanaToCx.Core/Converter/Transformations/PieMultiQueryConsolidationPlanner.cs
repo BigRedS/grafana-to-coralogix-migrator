@@ -79,9 +79,8 @@ public sealed class PieMultiQueryConsolidationPlanner : ITransformationPlanner
         if (!TryResolveDateHistogram(visibleTargets, out var histogram, out var histogramCode, out var histogramReason))
             return BuildSkipPlan(visibleTargets, histogramCode, histogramReason);
 
-        var groupByField = PanelConverters.CxFieldHelper.StripLogsFieldSuffixes(varyingPredicates[0].Field);
-        if (string.IsNullOrWhiteSpace(groupByField))
-            groupByField = varyingPredicates[0].Field;
+        if (!TryResolveGroupByField(visibleTargets, varyingPredicates, out var groupByField, out var groupByCode, out var groupByReason))
+            return BuildSkipPlan(visibleTargets, groupByCode, groupByReason);
 
         var baseFilter = string.Join(
             " AND ",
@@ -90,7 +89,7 @@ public sealed class PieMultiQueryConsolidationPlanner : ITransformationPlanner
                 .Select(FormatPredicate));
 
         var payload = BuildConsolidatedPayload(baseFilter, groupByField, aggregation, histogram, includeTimestampGrouping: isTimeSeries);
-        if (isPieChart && !HasNonEmptyDataPrimeGroupNames(payload))
+        if (isPieChart && !HasValidNonEmptyDataPrimeGroupNames(payload))
         {
             return BuildSkipPlan(
                 visibleTargets,
@@ -204,6 +203,112 @@ public sealed class PieMultiQueryConsolidationPlanner : ITransformationPlanner
                 dropped,
                 "select-one",
                 0.72));
+    }
+
+    private static bool TryResolveGroupByField(
+        IReadOnlyList<JObject> targets,
+        IReadOnlyList<LucenePredicate> varyingPredicates,
+        out string groupByField,
+        out string code,
+        out string reason)
+    {
+        groupByField = string.Empty;
+        code = string.Empty;
+        reason = string.Empty;
+
+        if (TryResolveConsistentTermsField(targets, out var termsField))
+        {
+            groupByField = termsField;
+            return true;
+        }
+
+        if (TryNormalizeValidGroupByField(varyingPredicates[0].Field, out var normalizedField))
+        {
+            groupByField = normalizedField;
+            return true;
+        }
+
+        code = "DGR-LMG-011";
+        reason = "Multi-Lucene merge skipped: resolved pie group-by field is empty or invalid after normalization.";
+        return false;
+    }
+
+    private static bool TryResolveConsistentTermsField(IReadOnlyList<JObject> targets, out string termsField)
+    {
+        termsField = string.Empty;
+        string? canonical = null;
+        foreach (var target in targets)
+        {
+            if (!TryExtractPrimaryTermsField(target, out var currentTermsField))
+                return false;
+
+            if (string.IsNullOrWhiteSpace(currentTermsField))
+                return false;
+
+            if (canonical == null)
+            {
+                canonical = currentTermsField;
+                continue;
+            }
+
+            if (!string.Equals(canonical, currentTermsField, StringComparison.Ordinal))
+                return false;
+        }
+
+        termsField = canonical ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(termsField);
+    }
+
+    private static bool TryExtractPrimaryTermsField(JObject target, out string termsField)
+    {
+        termsField = string.Empty;
+        var buckets = target["bucketAggs"] as JArray;
+        if (buckets == null || buckets.Count == 0)
+            return false;
+
+        foreach (var bucket in buckets.Children<JObject>())
+        {
+            if (!string.Equals(bucket.Value<string>("type"), "terms", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var rawField = bucket.Value<string>("field") ?? string.Empty;
+            return TryNormalizeValidGroupByField(rawField, out termsField);
+        }
+
+        return false;
+    }
+
+    private static bool TryNormalizeValidGroupByField(string rawField, out string normalizedField)
+    {
+        normalizedField = PanelConverters.CxFieldHelper.StripLogsFieldSuffixes(rawField).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedField))
+            normalizedField = rawField.Trim();
+
+        if (!IsValidGroupByField(normalizedField))
+        {
+            normalizedField = string.Empty;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsValidGroupByField(string field)
+    {
+        if (string.IsNullOrWhiteSpace(field))
+            return false;
+        if (field.Any(char.IsWhiteSpace))
+            return false;
+        if (field.StartsWith(".", StringComparison.Ordinal) || field.EndsWith(".", StringComparison.Ordinal))
+            return false;
+
+        foreach (var c in field)
+        {
+            if (c is '\'' or '"' or '(' or ')' or '[' or ']' or '{' or '}' or '*' or ',' or '|')
+                return false;
+        }
+
+        return true;
     }
 
     private static bool TryResolveAggregation(
@@ -606,9 +711,14 @@ public sealed class PieMultiQueryConsolidationPlanner : ITransformationPlanner
         };
     }
 
-    private static bool HasNonEmptyDataPrimeGroupNames(JObject payload)
+    private static bool HasValidNonEmptyDataPrimeGroupNames(JObject payload)
     {
-        return payload["dataprime"]?["groupNames"] is JArray groupNames && groupNames.Count > 0;
+        if (payload["dataprime"]?["groupNames"] is not JArray groupNames || groupNames.Count == 0)
+            return false;
+
+        return groupNames
+            .Values<string>()
+            .All(value => !string.IsNullOrWhiteSpace(value) && IsValidGroupByField(value));
     }
 
     private static string EscapeForDataPrimeLiteral(string lucene) =>

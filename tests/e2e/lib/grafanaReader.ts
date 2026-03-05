@@ -43,11 +43,7 @@ export async function readGrafanaDashboard(page: Page, grafanaDashboardId: strin
           continue;
         if (headerText.length > 120)
           continue;
-        const panelRoot =
-          header.closest("[data-testid='Panel'], .panel-container, article, section, [class*='panel']")
-          || header.parentElement?.parentElement
-          || header.parentElement
-          || header;
+        const panelRoot = pickBestPanelRoot(header);
         const rawText = (panelRoot.textContent || "").trim();
         if (!rawText)
           continue;
@@ -69,6 +65,39 @@ export async function readGrafanaDashboard(page: Page, grafanaDashboardId: strin
         hasNoData: patterns.noData.test(panel.rawText),
         hasVisibleError: patterns.error.test(panel.rawText)
       }));
+
+      function pickBestPanelRoot(header) {
+        const explicitPanel =
+          header.closest("[data-testid='Panel'], .panel-container, article, section, [class*='panel']");
+        if (explicitPanel) {
+          return explicitPanel;
+        }
+
+        let bestNode = header;
+        let bestScore = (header.textContent || "").trim().length;
+        let current = header.parentElement;
+        let depth = 0;
+
+        // Walk up a few levels and keep the richest visible text container.
+        while (current && depth < 8) {
+          const text = (current.textContent || "").trim();
+          const textLength = text.length;
+          const hasPanelHint =
+            current.getAttribute("data-testid")?.includes("Panel")
+            || /panel|viz|graph|timeseries/i.test(current.className || "");
+          const score = textLength + (hasPanelHint ? 500 : 0);
+
+          if (score > bestScore && textLength > headerText.length) {
+            bestScore = score;
+            bestNode = current;
+          }
+
+          current = current.parentElement;
+          depth += 1;
+        }
+
+        return bestNode;
+      }
 
       function parseNumericValuesInPage(value) {
         const normalized = value.replace(/,/g, "");
