@@ -27,6 +27,7 @@ public static class AppRunner
                 CommandKind.Interactive => await handlers.RunInteractiveConsoleAsync("migration-settings.json"),
                 CommandKind.Convert => await RunConvertFromArgs(handlers, parsed),
                 CommandKind.Migrate => await RunMigrateFromArgs(handlers, parsed),
+                CommandKind.Backup => await RunBackupFromArgs(handlers, parsed),
                 CommandKind.Verify => await RunVerifyFromArgs(handlers, parsed),
                 CommandKind.Import => await RunImportFromArgs(handlers, parsed),
                 _ => await handlers.RunInteractiveConsoleAsync("migration-settings.json")
@@ -85,7 +86,8 @@ public static class AppRunner
 
     private static string ResolveSettingsPath(ParsedArgs parsed)
     {
-        if (parsed.Command == CommandKind.Migrate && !string.IsNullOrWhiteSpace(parsed.Get("settings")))
+        if (parsed.Command is CommandKind.Migrate or CommandKind.Backup
+            && !string.IsNullOrWhiteSpace(parsed.Get("settings")))
         {
             return parsed.Get("settings")!;
         }
@@ -215,6 +217,16 @@ public static class AppRunner
         var settings = parsed.Get("settings") ?? "migration-settings.json";
         var interactive = parsed.GetBool("interactive");
         return await handlers.RunMigrateAsync(settings, interactive);
+    }
+
+    private static async Task<int> RunBackupFromArgs(CommandHandlers handlers, ParsedArgs parsed)
+    {
+        var settings = parsed.Get("settings") ?? "migration-settings.json";
+        return await handlers.RunBackupAsync(
+            settings,
+            parsed.Get("output"),
+            parsed.Get("region"),
+            parsed.GetBool("interactive"));
     }
 
     private static async Task<int> RunVerifyFromArgs(CommandHandlers handlers, ParsedArgs parsed)
