@@ -79,3 +79,6 @@ tests/e2e/.env.*
 playwright-report/
 test-results/
 blob-report/
+
+# Local working notes — contains customer dashboard/panel names, keep untracked
+todo.md
