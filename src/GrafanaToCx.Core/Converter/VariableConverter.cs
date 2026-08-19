@@ -108,8 +108,10 @@ public sealed class VariableConverter
         var includeAll = varToken.Value<bool?>("includeAll") ?? false;
         var multi = varToken.Value<bool?>("multi") ?? false;
         var current = varToken["current"] as JObject ?? new JObject();
-        var currentValue = current.Value<string>("value") ?? string.Empty;
-        var currentLabel = current.Value<string>("text") ?? string.Empty;
+        // A multi-select variable stores current.value/current.text as arrays, so read
+        // them through ExtractSingleValue rather than casting the token to string.
+        var currentValue = ExtractSingleValue(current["value"]);
+        var currentLabel = ExtractSingleValue(current["text"]);
         var useMulti = includeAll || multi
             || string.IsNullOrEmpty(currentValue)
             || currentValue == "$__all";
@@ -270,7 +272,11 @@ public sealed class VariableConverter
     private static JObject ConvertIntervalVariable(JObject varToken, string name)
     {
         var current = varToken["current"] as JObject ?? new JObject();
-        var currentValue = current.Value<string>("value") ?? "5m";
+        // Same array-shaped current guard as the query paths; an interval variable is
+        // rarely multi-select but the cast would throw identically if it were.
+        var currentValue = ExtractSingleValue(current["value"]);
+        if (string.IsNullOrEmpty(currentValue))
+            currentValue = "5m";
 
         return new JObject
         {
@@ -368,8 +374,10 @@ public sealed class VariableConverter
         var includeAll = varToken.Value<bool?>("includeAll") ?? false;
         var multi = varToken.Value<bool?>("multi") ?? false;
         var current = varToken["current"] as JObject ?? new JObject();
-        var currentValue = current.Value<string>("value") ?? string.Empty;
-        var currentLabel = current.Value<string>("text") ?? string.Empty;
+        // A multi-select variable stores current.value/current.text as arrays, so read
+        // them through ExtractSingleValue rather than casting the token to string.
+        var currentValue = ExtractSingleValue(current["value"]);
+        var currentLabel = ExtractSingleValue(current["text"]);
         var useMulti = includeAll || multi || string.IsNullOrEmpty(currentValue);
         var keypath = new JArray(fieldName.Split('.').Cast<object>().ToArray());
 
