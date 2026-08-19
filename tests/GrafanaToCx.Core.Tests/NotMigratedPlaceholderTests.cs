@@ -36,8 +36,8 @@ public class NotMigratedPlaceholderTests
     };
 
     [Theory]
-    [InlineData("grafana-piechart-panel")]
     [InlineData("table-old")]
+    [InlineData("flant-statusmap-panel")]
     public void DataPanelTypes_LeaveAPlaceholder(string panelType)
     {
         var widget = Assert.Single(Convert(Panel(panelType, "Top 10 Devices")));
@@ -63,7 +63,7 @@ public class NotMigratedPlaceholderTests
     public void MixedDashboard_MarksDataPanelsOnly()
     {
         var widgets = Convert(
-            Panel("grafana-piechart-panel", "Requests"),
+            Panel("flant-statusmap-panel", "Requests"),
             Panel("welcome"),
             Panel("dashlist", "Dashboards"),
             Panel("table-old", "Data Requests"));
@@ -80,19 +80,19 @@ public class NotMigratedPlaceholderTests
         var dashboard = new JObject
         {
             ["title"] = "Board",
-            ["panels"] = new JArray(Panel("grafana-piechart-panel", "Requests"))
+            ["panels"] = new JArray(Panel("table-old", "Requests"))
         };
 
         converter.ConvertToJObject(dashboard.ToString());
 
         Assert.Contains(converter.ConversionDiagnostics,
-            d => d.Code == "UNS-PNL-001" && d.PanelType == "grafana-piechart-panel");
+            d => d.Code == "UNS-PNL-001" && d.PanelType == "table-old");
     }
 
     [Fact]
     public void UntitledPanel_StillGetsAUsableTitle()
     {
-        var widget = Assert.Single(Convert(Panel("grafana-piechart-panel")));
+        var widget = Assert.Single(Convert(Panel("table-old")));
 
         Assert.Equal("Panel #1", widget.Value<string>("title"));
     }

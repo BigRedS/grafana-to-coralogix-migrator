@@ -341,7 +341,11 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
 
     private JObject? ConvertPanelToWidget(JObject panel, ISet<string> discoveredMetrics, ConversionOptions? options)
     {
-        var panelType = panel.Value<string>("type") ?? string.Empty;
+        // Dispatch on the canonical type so legacy identifiers reach the modern converter,
+        // but report the raw type — a diagnostic naming "piechart" for a panel the user
+        // authored as "grafana-piechart-panel" would be a lie.
+        var rawPanelType = panel.Value<string>("type") ?? string.Empty;
+        var panelType = PanelTypes.Normalize(rawPanelType);
         var panelTitle = panel.Value<string>("title") is { Length: > 0 } t ? t : $"Panel #{panel.Value<int>("id")}";
 
         var targets = panel["targets"] as JArray ?? new JArray();
@@ -353,21 +357,21 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         {
             AddDiagnostic(new PanelConversionDiagnostic(
                 panelTitle,
-                panelType,
+                rawPanelType,
                 "error",
                 failure.Reason,
                 failure.Code,
                 failure.DroppedSemantics,
                 failure.Approximation,
                 failure.ConfidenceScore));
-            return MarkdownPanelConverter.CreateErrorWidget(panelTitle, panelType, failure.Reason);
+            return MarkdownPanelConverter.CreateErrorWidget(panelTitle, rawPanelType, failure.Reason);
         }
 
         if (plan is TransformationPlan.Success { Decision: not null } plannedDecision)
         {
             AddDiagnostic(new PanelConversionDiagnostic(
                 panelTitle,
-                panelType,
+                rawPanelType,
                 plannedDecision.Decision.Outcome,
                 plannedDecision.Decision.Reason,
                 plannedDecision.Decision.Code,
@@ -394,7 +398,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
             {
                 AddDiagnostic(new PanelConversionDiagnostic(
                     panelTitle,
-                    panelType,
+                    rawPanelType,
                     "fallback",
                     "Converted with lineChart fallback.",
                     "DGR-LIN-001",
@@ -410,7 +414,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         {
             AddDiagnostic(new PanelConversionDiagnostic(
                 panelTitle,
-                panelType,
+                rawPanelType,
                 "skipped",
                 "Panel converter produced no widget (empty/hidden/invalid targets).",
                 "UNS-TGT-001",
@@ -430,7 +434,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         {
             AddDiagnostic(new PanelConversionDiagnostic(
                 panelTitle,
-                panelType,
+                rawPanelType,
                 "skipped",
                 "Unsupported Grafana panel type.",
                 "UNS-PNL-001",
@@ -442,7 +446,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
             // dashboard; Grafana's own chrome carries nothing to miss and goes quietly.
             return ChromePanelTypes.Contains(panelType)
                 ? null
-                : MarkdownPanelConverter.CreateNotMigratedWidget(panelTitle, panelType);
+                : MarkdownPanelConverter.CreateNotMigratedWidget(panelTitle, rawPanelType);
         }
 
         if (TryConvertShapeBasedFallback(panel, panelType, panelTitle, discoveredMetrics, plan, out var unsupportedFallbackWidget))
