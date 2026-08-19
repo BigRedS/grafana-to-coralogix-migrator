@@ -17,6 +17,21 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     {
         "timeseries", "graph"
     };
+
+    /// <summary>
+    /// Grafana chrome — panels carrying no user-authored content. Dropped silently rather
+    /// than leaving a "not migrated" placeholder, since there is nothing to miss.
+    /// </summary>
+    private static readonly HashSet<string> ChromePanelTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "welcome", "dashlist", "news"
+    };
+
+    /// <summary>
+    /// Transformation ids the converter actually applies. Everything else is recorded as a
+    /// dashboard-level loss. Empty today: no planner reads a transformation id.
+    /// </summary>
+    private static readonly HashSet<string> ImplementedTransformationIds = new(StringComparer.OrdinalIgnoreCase);
     private const string StatusHistoryPanelType = "status-history";
 
     private static readonly string[] SectionColors =
@@ -41,9 +56,11 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     private readonly DataTablePanelConverter _dataTableConverter = new();
     private readonly CompositeTransformationPlanner _transformationPlanner;
     private readonly List<PanelConversionDiagnostic> _conversionDiagnostics = [];
+    private readonly List<DashboardConversionDiagnostic> _dashboardDiagnostics = [];
     private readonly List<JObject> _conversionDecisionEvents = [];
 
     public IReadOnlyList<PanelConversionDiagnostic> ConversionDiagnostics => _conversionDiagnostics;
+    public IReadOnlyList<DashboardConversionDiagnostic> DashboardDiagnostics => _dashboardDiagnostics;
     public IReadOnlyList<JObject> ConversionDecisionEvents => _conversionDecisionEvents;
 
     public GrafanaToCxConverter(
@@ -63,6 +80,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     public JObject ConvertToJObject(string grafanaJson, ConversionOptions? options = null)
     {
         _conversionDiagnostics.Clear();
+        _dashboardDiagnostics.Clear();
         _conversionDecisionEvents.Clear();
         var sourceToken = JToken.Parse(grafanaJson);
         var sourceObject = sourceToken as JObject ?? new JObject();
@@ -71,11 +89,81 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         var discoveredMetrics = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var customDashboard = InitializeDashboard(grafana, options);
+        RecordDashboardLevelLosses(grafana);
         ConvertPanels(grafana, customDashboard, discoveredMetrics, options);
         ConvertVariables(grafana, customDashboard, discoveredMetrics);
         ApplyTimeFrame(grafana, customDashboard);
 
         return customDashboard;
+    }
+
+    /// <summary>
+    /// Records dashboard-wide elements the converter has no target for. These have no
+    /// corresponding read anywhere in conversion, so without this they vanish unreported.
+    /// </summary>
+    private void RecordDashboardLevelLosses(JObject grafana)
+    {
+        foreach (var annotation in (grafana["annotations"]?["list"] as JArray ?? []).Children<JObject>())
+        {
+            // builtIn 1 is Grafana's own "Annotations & Alerts" entry, on every dashboard.
+            if (annotation.Value<int?>("builtIn") == 1)
+                continue;
+
+            AddDashboardDiagnostic(new DashboardConversionDiagnostic(
+                "annotation",
+                annotation.Value<string>("name") ?? "(unnamed)",
+                "Annotation queries are not emitted; event overlays will be absent.",
+                DashboardDiagnosticCodes.Annotation));
+        }
+
+        foreach (var link in (grafana["links"] as JArray ?? []).Children<JObject>())
+        {
+            AddDashboardDiagnostic(new DashboardConversionDiagnostic(
+                "dashboardLink",
+                link.Value<string>("title") is { Length: > 0 } t ? t : $"({link.Value<string>("type")})",
+                "Dashboard links are not emitted.",
+                DashboardDiagnosticCodes.DashboardLink));
+        }
+    }
+
+    /// <summary>
+    /// Records per-panel elements that are read past but never applied.
+    /// </summary>
+    private void RecordPanelLevelLosses(JObject panel, string panelTitle)
+    {
+        foreach (var transformation in TransformationContext.GetTransformations(panel).Children<JObject>())
+        {
+            var id = transformation.Value<string>("id") ?? "(unnamed)";
+            if (ImplementedTransformationIds.Contains(id))
+                continue;
+
+            AddDashboardDiagnostic(new DashboardConversionDiagnostic(
+                "transformation",
+                id,
+                "Transformation is not applied; the widget shows untransformed query results.",
+                DashboardDiagnosticCodes.Transformation,
+                panelTitle));
+        }
+
+        if (panel["links"] is JArray links && links.Count > 0)
+        {
+            AddDashboardDiagnostic(new DashboardConversionDiagnostic(
+                "panelLink",
+                $"{links.Count} link(s)",
+                "Panel links are not emitted.",
+                DashboardDiagnosticCodes.PanelLink,
+                panelTitle));
+        }
+
+        if (panel.Value<string>("repeat") is { Length: > 0 } repeat)
+        {
+            AddDashboardDiagnostic(new DashboardConversionDiagnostic(
+                "panelRepeat",
+                $"${repeat}",
+                "Panel repeat is not expanded; one widget is emitted instead of one per value.",
+                DashboardDiagnosticCodes.PanelRepeat,
+                panelTitle));
+        }
     }
 
     private static JObject InitializeDashboard(JObject grafana, ConversionOptions? options)
@@ -258,6 +346,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
 
         var targets = panel["targets"] as JArray ?? new JArray();
         var transformations = TransformationContext.GetTransformations(panel);
+        RecordPanelLevelLosses(panel, panelTitle);
         var plan = _transformationPlanner.Plan(new TransformationContext(panel, targets, transformations));
 
         if (plan is TransformationPlan.Failure failure)
@@ -348,7 +437,12 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
                 [],
                 "none",
                 1.0));
-            return null;
+
+            // A panel that showed real data leaves a marker so the absence is visible on the
+            // dashboard; Grafana's own chrome carries nothing to miss and goes quietly.
+            return ChromePanelTypes.Contains(panelType)
+                ? null
+                : MarkdownPanelConverter.CreateNotMigratedWidget(panelTitle, panelType);
         }
 
         if (TryConvertShapeBasedFallback(panel, panelType, panelTitle, discoveredMetrics, plan, out var unsupportedFallbackWidget))
@@ -566,8 +660,14 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     {
         var grafanaVariables = grafana["templating"]?["list"] as JArray ?? new JArray();
         var variableConverter = new VariableConverter(_logger);
-        customDashboard["variablesV2"] = variableConverter.ConvertVariables(grafanaVariables, discoveredMetrics);
+        customDashboard["variablesV2"] = variableConverter.ConvertVariables(
+            grafanaVariables,
+            discoveredMetrics,
+            onDropped: AddDashboardDiagnostic);
     }
+
+    private void AddDashboardDiagnostic(DashboardConversionDiagnostic diagnostic) =>
+        _dashboardDiagnostics.Add(diagnostic);
 
     private static void ApplyTimeFrame(JObject grafana, JObject customDashboard)
     {

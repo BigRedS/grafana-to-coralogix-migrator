@@ -19,29 +19,64 @@ public sealed class VariableConverter
         _logger = logger;
     }
 
-    public JArray ConvertVariables(JArray grafanaVariables, ISet<string> discoveredMetrics)
+    public JArray ConvertVariables(
+        JArray grafanaVariables,
+        ISet<string> discoveredMetrics,
+        Action<DashboardConversionDiagnostic>? onDropped = null)
     {
         var result = new JArray();
         var sourceMetric = ResolveSourceMetric(discoveredMetrics);
 
         foreach (var varToken in grafanaVariables.Children<JObject>())
         {
+            var name = varToken.Value<string>("name") ?? "(unnamed)";
+            var varType = varToken.Value<string>("type") ?? "(untyped)";
+
             try
             {
                 var converted = ConvertVariable(varToken, sourceMetric);
                 if (converted != null)
                 {
                     result.Add(converted);
+                    continue;
                 }
+
+                onDropped?.Invoke(new DashboardConversionDiagnostic(
+                    "variable",
+                    name,
+                    DescribeDropReason(varToken, varType),
+                    DashboardDiagnosticCodes.Variable));
             }
             catch (Exception ex)
             {
                 _logger.LogDebug("Failed to convert variable: {Error}", ex.Message);
+                onDropped?.Invoke(new DashboardConversionDiagnostic(
+                    "variable",
+                    name,
+                    $"Variable of type '{varType}' failed to convert: {ex.Message}",
+                    DashboardDiagnosticCodes.Variable,
+                    Outcome: "error"));
             }
         }
 
         result.Add(BuildIntervalVariable());
         return result;
+    }
+
+    private static string DescribeDropReason(JObject varToken, string varType)
+    {
+        // The name-based skip list is checked before type, since it wins inside ConvertVariable too.
+        if (SkipVariableNames.Contains(varToken.Value<string>("name") ?? string.Empty))
+            return "Datasource placeholder left behind by dashboard export; skipped deliberately.";
+
+        return varType switch
+        {
+            "datasource" => "Datasource picker variables have no Coralogix equivalent.",
+            "adhoc" => "Ad-hoc filter variables have no Coralogix equivalent.",
+            "query" => "Query variable uses a form the converter has no rule for "
+                       + "(not label_values, not an Elasticsearch terms query, and no static options to fall back on).",
+            _ => $"Variables of type '{varType}' are not converted."
+        };
     }
 
     private JObject? ConvertVariable(JObject varToken, string sourceMetric)

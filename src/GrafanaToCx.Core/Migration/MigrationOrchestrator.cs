@@ -154,7 +154,8 @@ public sealed class MigrationOrchestrator
 
         _checkpoint.Upsert(entry);
         await _checkpoint.SaveAsync(ct);
-        _report.Add(BuildReportEntry(folder.Title, entry, _converter.ConversionDiagnostics));
+        _report.Add(BuildReportEntry(
+            folder.Title, entry, _converter.ConversionDiagnostics, _converter.DashboardDiagnostics));
     }
 
     private async Task AttemptMigrationAsync(CheckpointEntry entry, ConversionOptions options, CancellationToken ct)
@@ -340,7 +341,8 @@ public sealed class MigrationOrchestrator
     private static MigrationReportEntry BuildReportEntry(
         string folderTitle,
         CheckpointEntry entry,
-        IReadOnlyList<PanelConversionDiagnostic>? conversionDiagnostics = null) =>
+        IReadOnlyList<PanelConversionDiagnostic>? conversionDiagnostics = null,
+        IReadOnlyList<DashboardConversionDiagnostic>? dashboardDiagnostics = null) =>
         new()
         {
             FolderTitle = folderTitle,
@@ -348,6 +350,7 @@ public sealed class MigrationOrchestrator
             Status = entry.Status,
             CxDashboardId = entry.CxDashboardId,
             ErrorMessage = entry.ErrorMessage,
-            ConversionDiagnostics = conversionDiagnostics ?? []
+            ConversionDiagnostics = conversionDiagnostics ?? [],
+            DashboardDiagnostics = dashboardDiagnostics ?? []
         };
 }
