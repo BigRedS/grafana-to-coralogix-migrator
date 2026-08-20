@@ -91,11 +91,16 @@ public static class ArgumentParser
         string? output = null;
         string? profile = null;
         string? region = null;
+        string? format = null;
 
         for (var i = 0; i < rest.Length; i++)
         {
             var arg = rest[i];
-            if (arg is "-o" or "--output")
+            if (arg is "-f" or "--format")
+            {
+                if (i + 1 < rest.Length) { format = rest[i + 1]; i++; }
+            }
+            else if (arg is "-o" or "--output")
             {
                 if (i + 1 < rest.Length) { output = rest[i + 1]; i++; }
             }
@@ -118,7 +123,8 @@ public static class ArgumentParser
             ["input"] = input,
             ["output"] = output,
             ["profile"] = profile,
-            ["region"] = region
+            ["region"] = region,
+            ["format"] = format
         };
         return new ParsedArgs(CommandKind.Assess, dict);
     }

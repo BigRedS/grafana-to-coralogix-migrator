@@ -98,8 +98,15 @@ public sealed class CommandHandlers
     /// Reports how a set of Grafana dashboards would fare, without uploading anything.
     /// Accepts a directory of dashboard JSON or a backup .zip.
     /// </summary>
-    public async Task<int> RunAssessAsync(string input, string? output, string? profile, string? region)
+    public async Task<int> RunAssessAsync(
+        string input, string? output, string? profile, string? region, string? format = null)
     {
+        if (!TryParseReportFormat(format, out var reportFormat))
+        {
+            Console.Error.WriteLine($"Error: unknown format '{format}'. Use 'text' or 'markdown'.");
+            return 1;
+        }
+
         var sources = LoadDashboardSources(input);
         if (sources is null)
             return 1;
@@ -128,7 +135,7 @@ public sealed class CommandHandlers
         foreach (var (name, json) in sources)
             assessments.Add(await assessor.AssessAsync(name, json));
 
-        var report = AssessmentReport.Build(assessments);
+        var report = AssessmentReport.Build(assessments, reportFormat);
         Console.WriteLine();
         Console.WriteLine(report);
 
@@ -142,6 +149,17 @@ public sealed class CommandHandlers
         return assessments.Any(a => a.Verdict is AssessmentVerdict.Rejected or AssessmentVerdict.Failed)
             ? 1
             : 0;
+    }
+
+    private static bool TryParseReportFormat(string? format, out AssessmentReportFormat parsed)
+    {
+        if (string.IsNullOrWhiteSpace(format))
+        {
+            parsed = AssessmentReportFormat.Text;
+            return true;
+        }
+
+        return Enum.TryParse(format, ignoreCase: true, out parsed);
     }
 
     private static List<(string Name, string Json)>? LoadDashboardSources(string input)

@@ -498,6 +498,7 @@ dotnet run --project ./src/GrafanaToCx.Cli/GrafanaToCx.Cli.csproj -- assess ./gr
 |---|---|
 | `<input>` | Directory of Grafana dashboard JSON, a `backup` .zip, or a single file |
 | `-o`, `--output` | Also write the report to this path |
+| `-f`, `--format` | `text` (default) or `markdown` |
 | `-p`, `--profile` | cx CLI profile, for validating against the live API |
 | `-r`, `--region` | Coralogix region when using `CX_API_KEY` instead of a profile (default `eu1`) |
 

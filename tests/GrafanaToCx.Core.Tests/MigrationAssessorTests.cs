@@ -162,6 +162,39 @@ public class MigrationAssessorTests
     }
 
     [Fact]
+    public async Task MarkdownReport_UsesTables()
+    {
+        var report = AssessmentReport.Build(
+            [await Assess(Dashboard("Board", Timeseries("CPU")))],
+            AssessmentReportFormat.Markdown);
+
+        Assert.Contains("# Migration assessment", report);
+        Assert.Contains("| Verdict | Count | Meaning |", report);
+        Assert.Contains("| Verdict | Dashboard | Panels | Widgets | Problems |", report);
+    }
+
+    [Fact]
+    public async Task MarkdownReport_EscapesPipesInTitles()
+    {
+        // An unescaped pipe in a dashboard name would split the table cell.
+        var assessment = await Assess(Dashboard("Sales | EMEA", Timeseries("CPU")));
+
+        var report = AssessmentReport.Build([assessment], AssessmentReportFormat.Markdown);
+
+        Assert.Contains(@"Sales \| EMEA", report);
+    }
+
+    [Fact]
+    public async Task MarkdownReport_MarksACleanDashboardWithNoProblems()
+    {
+        var report = AssessmentReport.Build(
+            [await Assess(Dashboard("Board", Timeseries("CPU")))],
+            AssessmentReportFormat.Markdown);
+
+        Assert.Contains("| Clean | Board | 1 | 1 | — |", report);
+    }
+
+    [Fact]
     public async Task Report_ListsWorstDashboardsFirst()
     {
         var bad = Timeseries("Map");

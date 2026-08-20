@@ -8,14 +8,89 @@ namespace GrafanaToCx.Core.Assessment;
 /// </summary>
 public static class AssessmentReport
 {
-    public static string Build(IReadOnlyList<DashboardAssessment> assessments)
+    public static string Build(
+        IReadOnlyList<DashboardAssessment> assessments,
+        AssessmentReportFormat format = AssessmentReportFormat.Text)
     {
         var sb = new StringBuilder();
+
+        if (format == AssessmentReportFormat.Markdown)
+        {
+            AppendMarkdown(sb, assessments);
+            return sb.ToString();
+        }
+
         AppendSummary(sb, assessments);
         AppendCommonProblems(sb, assessments);
         AppendPerDashboard(sb, assessments);
         return sb.ToString();
     }
+
+    private static void AppendMarkdown(StringBuilder sb, IReadOnlyList<DashboardAssessment> assessments)
+    {
+        var byVerdict = assessments.GroupBy(a => a.Verdict).ToDictionary(g => g.Key, g => g.Count());
+        int Count(AssessmentVerdict v) => byVerdict.GetValueOrDefault(v);
+
+        sb.AppendLine("# Migration assessment");
+        sb.AppendLine();
+        sb.AppendLine($"{assessments.Count} dashboard(s) assessed. "
+                      + $"{assessments.Sum(a => a.PanelCount)} panels in, "
+                      + $"{assessments.Sum(a => a.WidgetCount)} widgets out.");
+        sb.AppendLine();
+        sb.AppendLine("| Verdict | Count | Meaning |");
+        sb.AppendLine("|---|---:|---|");
+        sb.AppendLine($"| Clean | {Count(AssessmentVerdict.Clean)} | migrate with nothing lost |");
+        sb.AppendLine($"| Degraded | {Count(AssessmentVerdict.Degraded)} | migrate, but something does not survive |");
+        sb.AppendLine($"| Rejected | {Count(AssessmentVerdict.Rejected)} | Coralogix would refuse these |");
+        sb.AppendLine($"| Failed | {Count(AssessmentVerdict.Failed)} | could not be converted at all |");
+        sb.AppendLine();
+
+        if (assessments.Count > 0 && assessments.All(a => !a.ValidationRan))
+        {
+            sb.AppendLine("> The cx CLI was not available, so nothing was validated against the "
+                          + "Coralogix API. Problems the API would reject are not included.");
+            sb.AppendLine();
+        }
+
+        var findings = assessments
+            .SelectMany(a => a.Findings)
+            .GroupBy(f => f.Detail)
+            .Select(g => (Detail: g.Key, Total: g.Sum(f => f.Count), Dashboards: g.Count()))
+            .OrderByDescending(x => x.Total)
+            .ToList();
+
+        if (findings.Count > 0)
+        {
+            sb.AppendLine("## What gets lost");
+            sb.AppendLine();
+            sb.AppendLine("| Count | Dashboards | Problem |");
+            sb.AppendLine("|---:|---:|---|");
+            foreach (var (detail, total, dashboards) in findings)
+                sb.AppendLine($"| {total} | {dashboards} | {detail} |");
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("## Per dashboard");
+        sb.AppendLine();
+        sb.AppendLine("| Verdict | Dashboard | Panels | Widgets | Problems |");
+        sb.AppendLine("|---|---|---:|---:|---|");
+
+        foreach (var a in assessments.OrderByDescending(x => x.Weight).ThenBy(x => x.Title))
+        {
+            var problems = a.ConversionError is not null
+                ? Escape(a.ConversionError)
+                : string.Join("; ", a.ValidationErrors.Select(e => $"REJECTED {Escape(e.Message)}")
+                    .Concat(a.Findings.OrderByDescending(f => f.Count).Select(f => Escape(f.ToString()))));
+
+            sb.AppendLine($"| {a.Verdict} | {Escape(a.Title)} | {a.PanelCount} | {a.WidgetCount} | "
+                          + $"{(problems.Length == 0 ? "—" : problems)} |");
+        }
+
+        sb.AppendLine();
+    }
+
+    /// <summary>A pipe in a title would split the markdown table cell.</summary>
+    private static string Escape(string value) => value.Replace("|", "\\|");
 
     private static void AppendSummary(StringBuilder sb, IReadOnlyList<DashboardAssessment> assessments)
     {

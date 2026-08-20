@@ -228,7 +228,8 @@ public static class AppRunner
         }
 
         return await handlers.RunAssessAsync(
-            input, parsed.Get("output"), parsed.Get("profile"), parsed.Get("region"));
+            input, parsed.Get("output"), parsed.Get("profile"), parsed.Get("region"),
+            parsed.Get("format"));
     }
 
     private static async Task<int> RunVerifyFromArgs(CommandHandlers handlers, ParsedArgs parsed)
