@@ -142,16 +142,22 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     /// </summary>
     private void RecordPanelLevelLosses(JObject panel, string panelTitle)
     {
+        var visibleTargets = VisibleTargetSelector.Resolve(panel["targets"] as JArray ?? []);
+
         foreach (var transformation in TransformationContext.GetTransformations(panel).Children<JObject>())
         {
             var id = transformation.Value<string>("id") ?? "(unnamed)";
             if (ImplementedTransformationIds.Contains(id))
                 continue;
 
+            var reason = DescribeTransformationLoss(id, visibleTargets);
+            if (reason is null)
+                continue;
+
             AddDashboardDiagnostic(new DashboardConversionDiagnostic(
                 "transformation",
                 id,
-                "Transformation is not applied; the widget shows untransformed query results.",
+                reason,
                 DashboardDiagnosticCodes.Transformation,
                 panelTitle));
         }
@@ -408,6 +414,49 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         if (target.Value<string>("refId") is { Length: > 0 } refId)
             return refId;
         return $"query {index + 1}";
+    }
+
+    /// <summary>
+    /// Transformations that combine several result frames into one. On a panel with a single
+    /// Elasticsearch query there is one frame, so nothing is joined and nothing is lost.
+    /// </summary>
+    private static readonly HashSet<string> FrameJoiningTransformations = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "merge", "joinByField"
+    };
+
+    /// <summary>
+    /// Says what a transformation costs this panel, or null when it costs nothing. Grafana
+    /// transformations run over query <em>results</em>; Coralogix has no equivalent stage, so
+    /// none are applied — but reporting every one as a loss overstates the damage, and the
+    /// point of these diagnostics is that a reader can trust them.
+    /// </summary>
+    private static string? DescribeTransformationLoss(string id, IReadOnlyList<JObject> visibleTargets)
+    {
+        if (FrameJoiningTransformations.Contains(id))
+        {
+            if (visibleTargets.Count > 1)
+            {
+                return "Transformation joins several query results, but the widget carries a single "
+                       + "query — the joined view cannot be reproduced.";
+            }
+
+            // A single Prometheus query still returns one frame per series, which this would
+            // have combined. A single Elasticsearch query returns one frame: nothing to join.
+            if (visibleTargets.Count == 0 || !IsPrometheusTarget(visibleTargets[0]))
+                return null;
+        }
+
+        return "Transformation is not applied; the widget shows untransformed query results.";
+    }
+
+    private static bool IsPrometheusTarget(JObject target)
+    {
+        var datasourceType = target["datasource"]?["type"]?.ToString();
+        if (string.Equals(datasourceType, "prometheus", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return target["expr"] is JValue;
     }
 
     private static string ResolvePanelTitle(JObject panel) =>
