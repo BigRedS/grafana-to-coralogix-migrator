@@ -27,4 +27,5 @@ public static class DashboardDiagnosticCodes
     public const string PanelRepeat = "UNS-RPT-001";
     public const string Transformation = "UNS-TRF-001";
     public const string Variable = "UNS-VAR-001";
+    public const string QueryMatcher = "DGR-VAR-002";
 }

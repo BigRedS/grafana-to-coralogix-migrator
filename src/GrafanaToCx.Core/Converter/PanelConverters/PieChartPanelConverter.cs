@@ -37,9 +37,16 @@ public sealed class PieChartPanelConverter : IPanelConverter
         }
         else
         {
-            pieQuery = IsElasticsearchTarget(target)
+            var built = IsElasticsearchTarget(target)
                 ? BuildLogsQuery(target)
                 : BuildMetricsQuery(panel, target, discoveredMetrics);
+
+            // An ungrouped metrics query cannot make a pie chart; let the converter skip the
+            // panel and report it rather than emitting something the API will reject.
+            if (built is null)
+                return null;
+
+            pieQuery = built;
         }
 
         return new JObject
@@ -107,7 +114,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
         return new JObject { ["logs"] = logsQuery };
     }
 
-    private static JObject BuildMetricsQuery(JObject panel, JObject target, ISet<string> discoveredMetrics)
+    private static JObject? BuildMetricsQuery(JObject panel, JObject target, ISet<string> discoveredMetrics)
     {
         var expr = target.Value<string>("expr") ?? string.Empty;
         var promql = QueryHelpers.CleanQuery(expr, discoveredMetrics);
@@ -130,8 +137,13 @@ public sealed class PieChartPanelConverter : IPanelConverter
             foreach (var label in ExtractPromqlGroupingLabels(promql))
                 groupNames.Add(label);
 
-        if (groupNames.Count > 0)
-            metricsQuery["groupNames"] = groupNames;
+        // No grouping anywhere means a single scalar — one slice, which Coralogix rejects
+        // outright. Signal that upward rather than emitting a widget that fails validation
+        // and takes the whole dashboard down with it.
+        if (groupNames.Count == 0)
+            return null;
+
+        metricsQuery["groupNames"] = groupNames;
 
         return new JObject
         {

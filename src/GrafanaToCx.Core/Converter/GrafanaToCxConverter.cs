@@ -109,8 +109,30 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         customDashboard["annotations"] = new JArray(_thresholdAnnotations);
         ConvertVariables(grafana, customDashboard, discoveredMetrics);
         ApplyTimeFrame(grafana, customDashboard);
+        // A reference to a variable we could not convert would have the API reject the whole
+        // dashboard, so stand in a placeholder and say so.
+        foreach (var name in DanglingVariableReferences.Fill(customDashboard))
+        {
+            AddDashboardDiagnostic(new DashboardConversionDiagnostic(
+                "variable",
+                name,
+                "Referenced by a query but not convertible; a placeholder variable was added so "
+                + "the dashboard loads. Populate it to restore the original filtering.",
+                DashboardDiagnosticCodes.Variable,
+                Outcome: "placeholder"));
+        }
+
         // Runs last: it needs the converted variables to know which are multi-value.
-        PromqlVariableMatchers.Normalize(customDashboard);
+        foreach (var name in PromqlVariableMatchers.Normalize(customDashboard).Distinct())
+        {
+            AddDashboardDiagnostic(new DashboardConversionDiagnostic(
+                "queryMatcher",
+                $"${{{name}}}",
+                "Trailing '.*' dropped from a variable matcher: it cannot survive unquoting, so a "
+                + "prefix match became an exact match.",
+                DashboardDiagnosticCodes.QueryMatcher,
+                Outcome: "degraded"));
+        }
 
         return customDashboard;
     }
