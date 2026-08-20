@@ -40,9 +40,9 @@ public class NotMigratedPlaceholderTests
     [InlineData("flant-statusmap-panel")]
     public void DataPanelTypes_LeaveAPlaceholder(string panelType)
     {
-        var widget = Assert.Single(Convert(Panel(panelType, "Top 10 Devices")));
+        var widget = Assert.Single(Convert(Panel(panelType, "Top 10 hosts")));
 
-        Assert.Equal("Top 10 Devices", widget.Value<string>("title"));
+        Assert.Equal("Top 10 hosts", widget.Value<string>("title"));
         var text = widget["definition"]?["markdown"]?["markdownText"]?.ToString();
         Assert.Contains("Not migrated", text);
         Assert.Contains(panelType, text);
@@ -66,11 +66,11 @@ public class NotMigratedPlaceholderTests
             Panel("flant-statusmap-panel", "Requests"),
             Panel("welcome"),
             Panel("dashlist", "Dashboards"),
-            Panel("table-old", "Data Requests"));
+            Panel("table-old", "Requests table"));
 
         Assert.Equal(2, widgets.Count);
         Assert.Contains(widgets, w => w.Value<string>("title") == "Requests");
-        Assert.Contains(widgets, w => w.Value<string>("title") == "Data Requests");
+        Assert.Contains(widgets, w => w.Value<string>("title") == "Requests table");
     }
 
     [Fact]

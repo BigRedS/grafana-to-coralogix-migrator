@@ -70,7 +70,7 @@ public class DashboardDiagnosticsTests
     [Fact]
     public void Transformations_AreReported_WithOwningPanel()
     {
-        var panel = TimeseriesPanel("Rejection percentage over time");
+        var panel = TimeseriesPanel("Error rate over time");
         panel["transformations"] = new JArray(
             new JObject { ["id"] = "merge" },
             new JObject { ["id"] = "calculateField" });
@@ -79,7 +79,7 @@ public class DashboardDiagnosticsTests
 
         var transforms = diagnostics.Where(d => d.ElementKind == "transformation").ToList();
         Assert.Equal(2, transforms.Count);
-        Assert.All(transforms, t => Assert.Equal("Rejection percentage over time", t.PanelTitle));
+        Assert.All(transforms, t => Assert.Equal("Error rate over time", t.PanelTitle));
         Assert.Contains(transforms, t => t.ElementName == "merge");
         Assert.Contains(transforms, t => t.ElementName == "calculateField");
     }

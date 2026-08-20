@@ -27,7 +27,7 @@ public class VariableMultiSelectCurrentTests
         ["type"] = "query",
         ["multi"] = true,
         ["includeAll"] = true,
-        ["query"] = "{\"find\": \"terms\", \"field\": \"deviceId.keyword\"}",
+        ["query"] = "{\"find\": \"terms\", \"field\": \"host.keyword\"}",
         ["current"] = current
     };
 
@@ -49,9 +49,9 @@ public class VariableMultiSelectCurrentTests
             ["value"] = new JArray("$__all")
         };
 
-        var converted = Convert(EsTermsVariable("deviceId", current));
+        var converted = Convert(EsTermsVariable("host", current));
 
-        var variable = Find(converted, "deviceId");
+        var variable = Find(converted, "host");
         Assert.NotNull(variable);
         Assert.NotNull(variable["source"]?["query"]?["logsQuery"]);
     }
@@ -103,9 +103,9 @@ public class VariableMultiSelectCurrentTests
     [Fact]
     public void EveryVariableOnAMultiSelectDashboard_Survives()
     {
-        // Mirrors Stephan_Monitoring_FE: five ES terms variables, all multi-select.
+        // Mirrors a real dashboard: five Elasticsearch terms variables, all multi-select.
         var current = new JObject { ["text"] = new JArray("All"), ["value"] = new JArray("$__all") };
-        var names = new[] { "deviceId", "clusterDb", "node", "acquirer", "type" };
+        var names = new[] { "host", "cluster", "node", "region", "tier" };
 
         var converted = Convert(names.Select(n => EsTermsVariable(n, current)).ToArray());
 

@@ -54,12 +54,12 @@ public class QuerylessPanelTests
     [Fact]
     public void TextPanelWithHtmlContent_KeepsItsContent()
     {
-        const string content = "<div style=\"text-align: center\">Debezium Connectors</div>";
+        const string content = "<div style=\"text-align: center\">Production environment</div>";
 
         var (converted, _) = Run(Dashboard(TextPanel(content)));
 
         var markdown = Assert.Single(Widgets(converted))["definition"]?["markdown"];
-        Assert.Contains("Debezium Connectors", markdown?.ToString());
+        Assert.Contains("Production environment", markdown?.ToString());
     }
 
     [Fact]

@@ -54,12 +54,12 @@ public class MigrationReportDashboardLossesTests
     public void PerDashboardDetail_NamesTheOwningPanel()
     {
         var report = new MigrationReport();
-        report.Add(Entry("Gateway Integra Cluster", Transformation("calculateField", "Rejection percentage")));
+        report.Add(Entry("Service Overview", Transformation("calculateField", "Error rate")));
 
         var text = report.Build();
 
-        Assert.Contains("[LOST] Ops / Gateway Integra Cluster", text);
-        Assert.Contains("transformation 'calculateField' [panel: Rejection percentage]", text);
+        Assert.Contains("[LOST] Ops / Service Overview", text);
+        Assert.Contains("transformation 'calculateField' [panel: Error rate]", text);
     }
 
     [Fact]

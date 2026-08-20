@@ -14,14 +14,14 @@ public class LegacyPanelTypeAliasTests
     {
         ["refId"] = refId,
         ["alias"] = "",
-        ["query"] = "message: DataRequestValues",
+        ["query"] = "message: RequestReceived",
         ["timeField"] = "@timestamp",
         ["metrics"] = new JArray(new JObject { ["id"] = "1", ["type"] = "count" }),
         ["bucketAggs"] = new JArray(new JObject
         {
             ["id"] = "2",
             ["type"] = "terms",
-            ["field"] = "deviceId.keyword",
+            ["field"] = "host.keyword",
             ["settings"] = new JObject { ["size"] = "10", ["order"] = "desc" }
         })
     };
@@ -30,7 +30,7 @@ public class LegacyPanelTypeAliasTests
     {
         ["id"] = 1,
         ["type"] = type,
-        ["title"] = "Top 10 Devices",
+        ["title"] = "Top 10 hosts",
         ["datasource"] = "Logs",
         ["targets"] = new JArray(refIds.Select(ElasticsearchTarget).Cast<object>().ToArray())
     };
@@ -57,7 +57,7 @@ public class LegacyPanelTypeAliasTests
 
         var widget = Assert.Single(widgets);
         Assert.NotNull(widget["definition"]?["pieChart"]);
-        Assert.Equal("Top 10 Devices", widget.Value<string>("title"));
+        Assert.Equal("Top 10 hosts", widget.Value<string>("title"));
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class LegacyPanelTypeAliasTests
 
         var query = widgets[0]["definition"]?["pieChart"]?["query"];
         Assert.NotNull(query);
-        Assert.Contains("DataRequestValues", query!.ToString());
+        Assert.Contains("RequestReceived", query!.ToString());
     }
 
     [Fact]
