@@ -14,7 +14,13 @@ public static class PanelTypes
     {
         // The community pie plugin superseded by the built-in piechart. Its targets carry the
         // same alias/bucketAggs/metrics/query/timeField shape the native piechart converter reads.
-        ["grafana-piechart-panel"] = "piechart"
+        ["grafana-piechart-panel"] = "piechart",
+
+        // Grafana's pre-7.x table. It stores column presentation as columns/styles rather than
+        // field config, but the table converter derives its columns from the query's bucketAggs
+        // and metrics and never reads panel-level column config, so the difference does not reach
+        // the output.
+        ["table-old"] = "table"
     };
 
     public static string Normalize(string? panelType)

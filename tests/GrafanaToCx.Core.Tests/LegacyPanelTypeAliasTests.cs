@@ -101,7 +101,9 @@ public class LegacyPanelTypeAliasTests
     [Theory]
     [InlineData("grafana-piechart-panel", "piechart")]
     [InlineData("GRAFANA-PIECHART-PANEL", "piechart")]
+    [InlineData("table-old", "table")]
     [InlineData("piechart", "piechart")]
+    [InlineData("table", "table")]
     [InlineData("timeseries", "timeseries")]
     [InlineData("", "")]
     [InlineData(null, "")]
@@ -114,7 +116,66 @@ public class LegacyPanelTypeAliasTests
     public void IsAlias_IdentifiesLegacyTypes()
     {
         Assert.True(PanelTypes.IsAlias("grafana-piechart-panel"));
+        Assert.True(PanelTypes.IsAlias("table-old"));
         Assert.False(PanelTypes.IsAlias("piechart"));
+        Assert.False(PanelTypes.IsAlias("table"));
         Assert.False(PanelTypes.IsAlias(null));
+    }
+
+    // ── table-old ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// table-old stores column presentation as columns/styles rather than field config, but the
+    /// table converter builds its columns from the query's bucketAggs and metrics, so that
+    /// difference never reaches the output.
+    /// </summary>
+    private static JObject LegacyTablePanel() => new()
+    {
+        ["id"] = 2,
+        ["type"] = "table-old",
+        ["title"] = "Requests table",
+        ["datasource"] = "Logs",
+        ["targets"] = new JArray(ElasticsearchTarget("A")),
+        // Presentation the modern table type does not use.
+        ["columns"] = new JArray(new JObject { ["text"] = "Count", ["value"] = "count" }),
+        ["styles"] = new JArray(new JObject { ["pattern"] = "Count", ["type"] = "number" })
+    };
+
+    [Fact]
+    public void LegacyTablePanel_ConvertsToADataTableWidget()
+    {
+        var (widgets, _) = Convert(LegacyTablePanel());
+
+        var widget = Assert.Single(widgets);
+        Assert.NotNull(widget["definition"]?["dataTable"]);
+        Assert.Equal("Requests table", widget.Value<string>("title"));
+    }
+
+    [Fact]
+    public void LegacyTablePanel_DerivesColumnsFromTheQuery()
+    {
+        var (widgets, _) = Convert(LegacyTablePanel());
+
+        var columns = widgets[0]["definition"]?["dataTable"]?["columns"] as JArray;
+        Assert.NotNull(columns);
+        Assert.NotEmpty(columns!);
+    }
+
+    [Fact]
+    public void LegacyTablePanel_CarriesItsQuery()
+    {
+        var (widgets, _) = Convert(LegacyTablePanel());
+
+        var query = widgets[0]["definition"]?["dataTable"]?["query"];
+        Assert.NotNull(query);
+        Assert.Contains("RequestReceived", query!.ToString());
+    }
+
+    [Fact]
+    public void LegacyTablePanel_IsNoLongerReportedAsUnsupported()
+    {
+        var (_, converter) = Convert(LegacyTablePanel());
+
+        Assert.DoesNotContain(converter.ConversionDiagnostics, d => d.Code == "UNS-PNL-001");
     }
 }
