@@ -63,6 +63,27 @@ public sealed class VariableConverter
         return result;
     }
 
+    /// <summary>
+    /// Whether a Grafana variable will be emitted as multi-value. Coralogix section repetition
+    /// only works against a multi-value variable, so this is checked before a repeat is honoured.
+    ///
+    /// Deliberately conservative — only an explicit <c>multi</c> or <c>includeAll</c> counts.
+    /// The conversion paths also treat an empty current value as multi, but that is incidental
+    /// rather than the author asking for multi-select, and over-reporting here would produce
+    /// sections that repeat exactly once.
+    /// </summary>
+    public static bool WillBeMultiValue(JObject varToken)
+    {
+        if (!IsConvertibleType(varToken.Value<string>("type")))
+            return false;
+
+        return (varToken.Value<bool?>("includeAll") ?? false)
+               || (varToken.Value<bool?>("multi") ?? false);
+    }
+
+    private static bool IsConvertibleType(string? varType) =>
+        varType is "query" or "interval" or "constant" or "custom";
+
     private static string DescribeDropReason(JObject varToken, string varType)
     {
         // The name-based skip list is checked before type, since it wins inside ConvertVariable too.

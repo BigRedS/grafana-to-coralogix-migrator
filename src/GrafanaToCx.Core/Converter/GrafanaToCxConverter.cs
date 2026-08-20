@@ -69,6 +69,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     private readonly List<PanelConversionDiagnostic> _conversionDiagnostics = [];
     private readonly List<DashboardConversionDiagnostic> _dashboardDiagnostics = [];
     private readonly List<JObject> _conversionDecisionEvents = [];
+    private readonly HashSet<string> _honouredRepeatPanels = new(StringComparer.Ordinal);
 
     public IReadOnlyList<PanelConversionDiagnostic> ConversionDiagnostics => _conversionDiagnostics;
     public IReadOnlyList<DashboardConversionDiagnostic> DashboardDiagnostics => _dashboardDiagnostics;
@@ -93,6 +94,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         _conversionDiagnostics.Clear();
         _dashboardDiagnostics.Clear();
         _conversionDecisionEvents.Clear();
+        _honouredRepeatPanels.Clear();
         var sourceToken = JToken.Parse(grafanaJson);
         var sourceObject = sourceToken as JObject ?? new JObject();
         var grafana = sourceObject["dashboard"] as JObject ?? sourceObject;
@@ -174,12 +176,14 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
                 panelTitle));
         }
 
-        if (panel.Value<string>("repeat") is { Length: > 0 } repeat)
+        if (panel.Value<string>("repeat") is { Length: > 0 } repeat
+            && !_honouredRepeatPanels.Contains(PanelIdentity(panel)))
         {
             AddDashboardDiagnostic(new DashboardConversionDiagnostic(
                 "panelRepeat",
                 $"${repeat}",
-                "Panel repeat is not expanded; one widget is emitted instead of one per value.",
+                "Panel repeat is not expanded: no multi-value variable of that name exists, "
+                + "so one widget is emitted instead of one per value.",
                 DashboardDiagnosticCodes.PanelRepeat,
                 panelTitle));
         }
@@ -210,6 +214,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     private void ConvertPanels(JObject grafana, JObject customDashboard, ISet<string> discoveredMetrics, ConversionOptions? options)
     {
         var panels = grafana["panels"] as JArray ?? new JArray();
+        var repeatableVariables = ResolveRepeatableVariableNames(grafana);
         var sections = GroupPanelsIntoSections(panels);
 
         if (sections.Count == 0 && panels.Count > 0)
@@ -223,8 +228,12 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
 
         foreach (var (title, sectionPanels) in sections.Where(s => s.panels.Count > 0))
         {
-            outputSections.Add(CreateSection(sectionPanels, title, colorIndex, discoveredMetrics, options));
-            colorIndex++;
+            foreach (var chunk in SplitOutRepeatingPanels(sectionPanels, title, repeatableVariables))
+            {
+                outputSections.Add(CreateSection(
+                    chunk.Panels, chunk.Title, colorIndex, discoveredMetrics, options, chunk.RepeatVariable));
+                colorIndex++;
+            }
         }
     }
 
@@ -283,11 +292,12 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     }
 
     private JObject CreateSection(
-        List<JObject> panels,
+        IReadOnlyList<JObject> panels,
         string? sectionTitle,
         int colorIndex,
         ISet<string> discoveredMetrics,
-        ConversionOptions? options)
+        ConversionOptions? options,
+        string? repeatVariable = null)
     {
         const int maxWidgetsPerRow = 3;
         var rows = new JArray();
@@ -352,7 +362,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
 
         FlushWidgets(currentWidgets, rows);
 
-        var sectionOptions = BuildSectionOptions(sectionTitle, colorIndex);
+        var sectionOptions = BuildSectionOptions(sectionTitle, colorIndex, repeatVariable);
 
         return new JObject
         {
@@ -793,24 +803,90 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         });
     }
 
-    private static JObject BuildSectionOptions(string? sectionTitle, int colorIndex)
+    /// <summary>
+    /// One chunk of a Grafana row after repeating panels have been separated out. Coralogix
+    /// repeats a whole section, so a repeating panel cannot share one with its neighbours.
+    /// </summary>
+    private sealed record SectionChunk(IReadOnlyList<JObject> Panels, string? Title, string? RepeatVariable);
+
+    /// <summary>
+    /// Names of variables a section may repeat over: present on the dashboard and multi-value.
+    /// The API does not validate the reference, so a dangling name would fail silently at
+    /// render time rather than being caught by the pre-upload check.
+    /// </summary>
+    private static HashSet<string> ResolveRepeatableVariableNames(JObject grafana)
     {
-        if (string.IsNullOrWhiteSpace(sectionTitle))
+        var names = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var variable in (grafana["templating"]?["list"] as JArray ?? []).Children<JObject>())
+        {
+            var name = variable.Value<string>("name");
+            if (!string.IsNullOrEmpty(name) && VariableConverter.WillBeMultiValue(variable))
+                names.Add(name);
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// Splits a row so that each repeating panel gets a section of its own, preserving document
+    /// order. A panel whose repeat variable is missing or single-valued stays where it is and is
+    /// reported as a loss.
+    /// </summary>
+    private IEnumerable<SectionChunk> SplitOutRepeatingPanels(
+        IReadOnlyList<JObject> panels,
+        string? title,
+        IReadOnlySet<string> repeatableVariables)
+    {
+        var pending = new List<JObject>();
+
+        foreach (var panel in panels)
+        {
+            var repeat = panel.Value<string>("repeat");
+            if (string.IsNullOrEmpty(repeat) || !repeatableVariables.Contains(repeat))
+            {
+                pending.Add(panel);
+                continue;
+            }
+
+            if (pending.Count > 0)
+            {
+                yield return new SectionChunk(pending.ToList(), title, null);
+                pending.Clear();
+            }
+
+            _honouredRepeatPanels.Add(PanelIdentity(panel));
+            yield return new SectionChunk([panel], ResolvePanelTitle(panel), repeat);
+        }
+
+        if (pending.Count > 0)
+            yield return new SectionChunk(pending, title, null);
+    }
+
+    private static string PanelIdentity(JObject panel) =>
+        $"{panel.Value<int?>("id")}|{panel.Value<string>("title")}";
+
+    private static JObject BuildSectionOptions(string? sectionTitle, int colorIndex, string? repeatVariable = null)
+    {
+        // SectionOptions is a oneof: custom XOR internal. A repeating section must therefore
+        // use custom, which also means it needs a name.
+        if (string.IsNullOrWhiteSpace(sectionTitle) && repeatVariable is null)
         {
             return new JObject { ["internal"] = new JObject() };
         }
 
         var color = SectionColors[colorIndex % SectionColors.Length];
-
-        return new JObject
+        var custom = new JObject
         {
-            ["custom"] = new JObject
-            {
-                ["name"] = sectionTitle,
-                ["collapsed"] = false,
-                ["color"] = new JObject { ["predefined"] = color }
-            }
+            ["name"] = string.IsNullOrWhiteSpace(sectionTitle) ? $"${repeatVariable}" : sectionTitle,
+            ["collapsed"] = false,
+            ["color"] = new JObject { ["predefined"] = color }
         };
+
+        if (repeatVariable is not null)
+            custom["repetitiveVar"] = new JObject { ["name"] = repeatVariable };
+
+        return new JObject { ["custom"] = custom };
     }
 
     private void ConvertVariables(JObject grafana, JObject customDashboard, ISet<string> discoveredMetrics)
