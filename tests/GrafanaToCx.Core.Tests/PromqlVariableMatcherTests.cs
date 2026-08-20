@@ -40,11 +40,13 @@ public class PromqlVariableMatcherTests
     }
 
     [Fact]
-    public void PlaceholderWithASuffixInsideQuotes_IsNotTouched()
+    public void PlaceholderWithASuffixInsideQuotes_LosesTheSuffix()
     {
-        // Stripping only the opening quote here would produce invalid PromQL.
-        const string query = """up{instance=~"${server}.*"}""";
-        Assert.Equal(query, PromqlVariableMatchers.Rewrite(query, NoMulti));
+        // `label=~${var}.*` is a PromQL syntax error, so the suffix cannot be carried over.
+        // The narrowing from prefix- to exact-match is reported by the converter.
+        Assert.Equal(
+            "up{instance=~${server}}",
+            PromqlVariableMatchers.Rewrite("""up{instance=~"${server}.*"}""", NoMulti));
     }
 
     [Fact]

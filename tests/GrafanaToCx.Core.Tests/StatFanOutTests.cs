@@ -11,7 +11,7 @@ namespace GrafanaToCx.Core.Tests;
 /// </summary>
 public class StatFanOutTests
 {
-    private static JObject Target(string refId, string? alias, string expr = "sum(up)")
+    private static JObject Target(string refId, string? alias, string expr = "sum(up) by (job)")
     {
         var target = new JObject { ["refId"] = refId, ["expr"] = expr };
         if (alias is not null) target["alias"] = alias;
