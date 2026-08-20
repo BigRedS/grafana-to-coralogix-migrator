@@ -70,6 +70,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     private readonly List<DashboardConversionDiagnostic> _dashboardDiagnostics = [];
     private readonly List<JObject> _conversionDecisionEvents = [];
     private readonly HashSet<string> _honouredRepeatPanels = new(StringComparer.Ordinal);
+    private readonly List<JObject> _thresholdAnnotations = [];
 
     public IReadOnlyList<PanelConversionDiagnostic> ConversionDiagnostics => _conversionDiagnostics;
     public IReadOnlyList<DashboardConversionDiagnostic> DashboardDiagnostics => _dashboardDiagnostics;
@@ -95,6 +96,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         _dashboardDiagnostics.Clear();
         _conversionDecisionEvents.Clear();
         _honouredRepeatPanels.Clear();
+        _thresholdAnnotations.Clear();
         var sourceToken = JToken.Parse(grafanaJson);
         var sourceObject = sourceToken as JObject ?? new JObject();
         var grafana = sourceObject["dashboard"] as JObject ?? sourceObject;
@@ -104,6 +106,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         var customDashboard = InitializeDashboard(grafana, options);
         RecordDashboardLevelLosses(grafana);
         ConvertPanels(grafana, customDashboard, discoveredMetrics, options);
+        customDashboard["annotations"] = new JArray(_thresholdAnnotations);
         ConvertVariables(grafana, customDashboard, discoveredMetrics);
         ApplyTimeFrame(grafana, customDashboard);
         // Runs last: it needs the converted variables to know which are multi-value.
@@ -356,6 +359,7 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
             var widget = ConvertPanelToWidget(panel, discoveredMetrics, options);
             if (widget != null)
             {
+                CollectThresholdAnnotations(panel, widget);
                 currentWidgets.Add(widget);
             }
         }
@@ -861,6 +865,27 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
 
         if (pending.Count > 0)
             yield return new SectionChunk(pending, title, null);
+    }
+
+    /// <summary>
+    /// Grafana draws thresholds as horizontal lines on a time series. Coralogix has no
+    /// equivalent on the widget, so they become dashboard annotations scoped to it.
+    /// Only line charts: gauges already carry their thresholds natively.
+    /// </summary>
+    private void CollectThresholdAnnotations(JObject panel, JObject widget)
+    {
+        if (widget["definition"]?["lineChart"] is null)
+            return;
+
+        var widgetId = widget["id"]?["value"]?.ToString();
+        if (string.IsNullOrEmpty(widgetId))
+            return;
+
+        var annotations = ThresholdAnnotations.Build(panel, widgetId, ResolvePanelTitle(panel));
+        if (annotations.Count == 0)
+            return;
+
+        _thresholdAnnotations.AddRange(annotations);
     }
 
     private static string PanelIdentity(JObject panel) =>
