@@ -3,6 +3,7 @@
 A .NET 9 CLI tool that converts Grafana dashboards into Coralogix custom dashboard format.
 
 It supports:
+- Pre-migration assessment of a set of boards (`assess`)
 - Single-file conversion (`convert`)
 - Single-file conversion + upload (`push`)
 - Bulk migration from live Grafana (`migrate`)
@@ -483,6 +484,54 @@ dotnet run --project ./src/GrafanaToCx.Cli/GrafanaToCx.Cli.csproj -- migrate --s
 API key precedence for non-interactive `migrate`:
 1. `GRAFANA_API_KEY` / `CX_API_KEY` environment variables
 2. `credentials.grafanaApiKey` / `credentials.cxApiKey` in the settings file
+
+### `assess`
+
+Reports how a set of Grafana dashboards would fare **without uploading anything** — which
+migrate cleanly, which lose something, and which Coralogix would refuse.
+
+```bash
+dotnet run --project ./src/GrafanaToCx.Cli/GrafanaToCx.Cli.csproj -- assess ./grafana-dashboards
+```
+
+| Argument/Flag | Description |
+|---|---|
+| `<input>` | Directory of Grafana dashboard JSON, a `backup` .zip, or a single file |
+| `-o`, `--output` | Also write the report to this path |
+| `-p`, `--profile` | cx CLI profile, for validating against the live API |
+| `-r`, `--region` | Coralogix region when using `CX_API_KEY` instead of a profile (default `eu1`) |
+
+Each dashboard gets one of four verdicts:
+
+| Verdict | Meaning |
+|---|---|
+| `OK` | Converts with nothing lost |
+| `DEGRADED` | Converts and uploads, but something does not survive |
+| `REJECTED` | Coralogix would refuse it — nothing would land |
+| `FAILED` | Could not be converted at all |
+
+If the [`cx` CLI](#pre-upload-validation-with-the-cx-cli) is installed, each dashboard is also
+validated against the live API, which is what distinguishes `REJECTED` from `DEGRADED`. Without
+it the assessment still reports what conversion loses, and says so at the top of the report.
+
+Exits non-zero if any dashboard would be rejected or failed, so it can gate a pipeline.
+
+Sample output:
+
+```
+Dashboards assessed : 71
+
+  Clean             : 21   migrate with nothing lost
+  Degraded          : 50   migrate, but something does not survive
+  Rejected          : 0   Coralogix would refuse these
+  Failed            : 0   could not be converted at all
+
+What gets lost
+--------------
+    126  across  33 dashboard(s)  widgets keep only their first query
+     88  across  17 dashboard(s)  transformations are not applied; numbers may differ
+     74  across   3 dashboard(s)  status-history panels become tables
+```
 
 ### `push`
 
