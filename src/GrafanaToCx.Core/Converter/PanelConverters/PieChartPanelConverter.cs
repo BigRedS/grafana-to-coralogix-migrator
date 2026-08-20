@@ -121,13 +121,46 @@ public sealed class PieChartPanelConverter : IPanelConverter
             ["filters"] = new JArray()
         };
 
+        // Coralogix rejects a metrics pie chart with empty group_names, so fall back to the
+        // PromQL grouping clause when the legend format does not name a label.
+        var groupNames = new JArray();
         if (!string.IsNullOrWhiteSpace(groupName))
-            metricsQuery["groupNames"] = new JArray(groupName);
+            groupNames.Add(groupName);
+        else
+            foreach (var label in ExtractPromqlGroupingLabels(promql))
+                groupNames.Add(label);
+
+        if (groupNames.Count > 0)
+            metricsQuery["groupNames"] = groupNames;
 
         return new JObject
         {
             ["metrics"] = metricsQuery
         };
+    }
+
+    /// <summary>
+    /// Labels from a PromQL grouping clause — both <c>sum(...) by (a, b)</c> and
+    /// <c>sum by (a, b) (...)</c>. <c>without</c> is not usable here: it names the labels to
+    /// drop rather than the ones to group by.
+    /// </summary>
+    public static IReadOnlyList<string> ExtractPromqlGroupingLabels(string promql)
+    {
+        if (string.IsNullOrWhiteSpace(promql))
+            return [];
+
+        var match = System.Text.RegularExpressions.Regex.Match(
+            promql,
+            @"\bby\s*\(\s*(?<labels>[^)]*?)\s*\)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+            return [];
+
+        return match.Groups["labels"].Value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(label => label.Length > 0)
+            .ToList();
     }
 
     private static string? InferMetricsGroupNameFromDisplayName(JObject panel)
