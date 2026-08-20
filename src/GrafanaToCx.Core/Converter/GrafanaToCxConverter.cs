@@ -104,6 +104,8 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         ConvertPanels(grafana, customDashboard, discoveredMetrics, options);
         ConvertVariables(grafana, customDashboard, discoveredMetrics);
         ApplyTimeFrame(grafana, customDashboard);
+        // Runs last: it needs the converted variables to know which are multi-value.
+        PromqlVariableMatchers.Normalize(customDashboard);
 
         return customDashboard;
     }

@@ -66,6 +66,14 @@ public sealed class MigrationRunSettings
     /// the layout of dashboards built around the idiom. Off by default.
     /// </summary>
     public bool FanOutMultiQueryPanels { get; init; }
+
+    /// <summary>
+    /// Optional cx CLI profile used for pre-upload validation. Needed when the account
+    /// authenticates via OAuth; with a key-authenticated account the migration's own
+    /// CX_API_KEY is used and this can stay empty. Validation is skipped entirely when the
+    /// cx CLI is not installed.
+    /// </summary>
+    public string? CxCliProfile { get; init; }
 }
 
 public sealed class MultiLuceneMergeSettings
