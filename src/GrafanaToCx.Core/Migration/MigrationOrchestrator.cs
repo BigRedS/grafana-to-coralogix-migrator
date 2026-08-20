@@ -97,7 +97,11 @@ public sealed class MigrationOrchestrator
                 cxFolderId = _settings.Coralogix.FolderId;
             }
 
-            var options = new ConversionOptions { FolderId = cxFolderId };
+            var options = new ConversionOptions
+            {
+                FolderId = cxFolderId,
+                FanOutMultiQueryPanels = _settings.Migration.FanOutMultiQueryPanels
+            };
             await ProcessFolderAsync(folder, options, ct);
         }
 

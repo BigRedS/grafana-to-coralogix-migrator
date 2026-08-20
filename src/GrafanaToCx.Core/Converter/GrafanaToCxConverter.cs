@@ -32,6 +32,17 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
     /// dashboard-level loss. Empty today: no planner reads a transformation id.
     /// </summary>
     private static readonly HashSet<string> ImplementedTransformationIds = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Panel types eligible for fan-out. Restricted to the stat family, where Grafana already
+    /// draws one tile per query so N widgets is what the user was looking at. Deliberately
+    /// excludes table (its queries are joined by a transformation into one view), piechart
+    /// (its queries are slices of one chart) and bargauge (buckets of one distribution).
+    /// </summary>
+    private static readonly HashSet<string> FanOutPanelTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "stat", "singlestat"
+    };
     private const string StatusHistoryPanelType = "status-history";
 
     private static readonly string[] SectionColors =
@@ -294,6 +305,31 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
                 continue;
             }
 
+            if (TryFanOutPanel(panel, options, out var fanOutPanels))
+            {
+                // Record against the original panel exactly once. The clones must not report,
+                // or a five-way fan-out would report the same transformation five times and
+                // the repeat — which belongs to the panel, not a slice — not at all.
+                RecordPanelLevelLosses(panel, ResolvePanelTitle(panel));
+
+                // Keep the group on its own row(s) so it still reads as one panel would have.
+                FlushWidgets(currentWidgets, rows);
+
+                foreach (var clone in fanOutPanels)
+                {
+                    if (currentWidgets.Count >= maxWidgetsPerRow)
+                        FlushWidgets(currentWidgets, rows);
+
+                    var fanOutWidget = ConvertPanelToWidget(
+                        clone, discoveredMetrics, options, recordPanelLevelLosses: false);
+                    if (fanOutWidget != null)
+                        currentWidgets.Add(fanOutWidget);
+                }
+
+                FlushWidgets(currentWidgets, rows);
+                continue;
+            }
+
             if (currentWidgets.Count >= maxWidgetsPerRow)
             {
                 FlushWidgets(currentWidgets, rows);
@@ -318,6 +354,67 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         };
     }
 
+    /// <summary>
+    /// Splits a multi-query stat panel into one single-query panel per target. Each clone runs
+    /// through the normal pipeline, so the planner sees one target and reports no degradation.
+    /// Returns false — leaving the panel untouched — unless fan-out is enabled and applicable.
+    /// </summary>
+    private static bool TryFanOutPanel(
+        JObject panel,
+        ConversionOptions? options,
+        out IReadOnlyList<JObject> fanOutPanels)
+    {
+        fanOutPanels = [];
+
+        if (options?.FanOutMultiQueryPanels != true)
+            return false;
+
+        var panelType = PanelTypes.Normalize(panel.Value<string>("type"));
+        if (!FanOutPanelTypes.Contains(panelType))
+            return false;
+
+        var visibleTargets = VisibleTargetSelector.Resolve(panel["targets"] as JArray ?? []);
+        if (visibleTargets.Count < 2)
+            return false;
+
+        var panelTitle = ResolvePanelTitle(panel);
+
+        var clones = new List<JObject>(visibleTargets.Count);
+        for (var i = 0; i < visibleTargets.Count; i++)
+        {
+            var target = visibleTargets[i];
+            var clone = (JObject)panel.DeepClone();
+            clone["targets"] = new JArray(target.DeepClone());
+            clone["title"] = $"{panelTitle} — {DescribeTarget(target, i)}";
+            // The repeat belongs to the original panel, not to each slice of it.
+            clone.Remove("repeat");
+            clones.Add(clone);
+        }
+
+        fanOutPanels = clones;
+        return true;
+    }
+
+    /// <summary>
+    /// Names one slice of a fanned-out panel. Grafana labels these tiles with the target alias,
+    /// so that is the closest thing to what the user already reads on the panel.
+    /// </summary>
+    private static string DescribeTarget(JObject target, int index)
+    {
+        if (target.Value<string>("alias") is { Length: > 0 } alias)
+            return alias;
+        if (target.Value<string>("legendFormat") is { Length: > 0 } legend)
+            return legend;
+        if (target.Value<string>("refId") is { Length: > 0 } refId)
+            return refId;
+        return $"query {index + 1}";
+    }
+
+    private static string ResolvePanelTitle(JObject panel) =>
+        panel.Value<string>("title") is { Length: > 0 } title
+            ? title
+            : $"Panel #{panel.Value<int>("id")}";
+
     private static void FlushWidgets(List<JObject> widgets, JArray rows)
     {
         if (widgets.Count == 0)
@@ -339,18 +436,23 @@ public sealed class GrafanaToCxConverter : IGrafanaToCxConverter
         };
     }
 
-    private JObject? ConvertPanelToWidget(JObject panel, ISet<string> discoveredMetrics, ConversionOptions? options)
+    private JObject? ConvertPanelToWidget(
+        JObject panel,
+        ISet<string> discoveredMetrics,
+        ConversionOptions? options,
+        bool recordPanelLevelLosses = true)
     {
         // Dispatch on the canonical type so legacy identifiers reach the modern converter,
         // but report the raw type — a diagnostic naming "piechart" for a panel the user
         // authored as "grafana-piechart-panel" would be a lie.
         var rawPanelType = panel.Value<string>("type") ?? string.Empty;
         var panelType = PanelTypes.Normalize(rawPanelType);
-        var panelTitle = panel.Value<string>("title") is { Length: > 0 } t ? t : $"Panel #{panel.Value<int>("id")}";
+        var panelTitle = ResolvePanelTitle(panel);
 
         var targets = panel["targets"] as JArray ?? new JArray();
         var transformations = TransformationContext.GetTransformations(panel);
-        RecordPanelLevelLosses(panel, panelTitle);
+        if (recordPanelLevelLosses)
+            RecordPanelLevelLosses(panel, panelTitle);
         var plan = _transformationPlanner.Plan(new TransformationContext(panel, targets, transformations));
 
         if (plan is TransformationPlan.Failure failure)

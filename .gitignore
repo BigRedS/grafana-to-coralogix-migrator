@@ -82,3 +82,6 @@ blob-report/
 
 # Local working notes — contains customer dashboard/panel names, keep untracked
 todo.md
+
+# Local working notes — contains customer dashboard/widget names, keep untracked
+shortcomings.md

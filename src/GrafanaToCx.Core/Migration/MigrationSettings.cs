@@ -59,6 +59,13 @@ public sealed class MigrationRunSettings
     public int MaxRetries { get; init; } = 5;
     public int InitialRetryDelaySeconds { get; init; } = 2;
     public MultiLuceneMergeSettings MultiLuceneMerge { get; init; } = new();
+
+    /// <summary>
+    /// When true, a stat panel with several queries becomes one widget per query rather than
+    /// keeping the first and dropping the rest. Preserves the data; adds widgets and so changes
+    /// the layout of dashboards built around the idiom. Off by default.
+    /// </summary>
+    public bool FanOutMultiQueryPanels { get; init; }
 }
 
 public sealed class MultiLuceneMergeSettings
