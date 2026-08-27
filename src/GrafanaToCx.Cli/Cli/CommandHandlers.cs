@@ -479,6 +479,15 @@ public sealed class CommandHandlers
             grafanaClient,
             _loggerFactory.CreateLogger<GrafanaDashboardBackupService>());
 
+        // Optional pre-upload validation against the live API; a no-op unless `cx` is installed.
+        var cxChecker = new CxCliDashboardChecker(
+            _loggerFactory.CreateLogger<CxCliDashboardChecker>(),
+            cxApiKey,
+            settings.Coralogix.Region,
+            settings.Migration.CxCliProfile);
+        if (cxChecker.IsInstalled)
+            Console.WriteLine("cx CLI detected — dashboards will be validated before upload.");
+
         var orchestrator = new MigrationOrchestrator(
             grafanaClient,
             converter,
@@ -489,7 +498,8 @@ public sealed class CommandHandlers
             settings,
             _loggerFactory.CreateLogger<MigrationOrchestrator>(),
             structureFoldersClient,
-            backupService);
+            backupService,
+            cxChecker);
 
         await orchestrator.RunAsync();
         return 0;

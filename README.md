@@ -389,6 +389,41 @@ Full settings file with all available fields:
 | `migration.maxRetries` | Max retries per dashboard |
 | `migration.initialRetryDelaySeconds` | Initial exponential backoff delay |
 
+### `migration.fanOutMultiQueryPanels`
+
+A Coralogix gauge carries a single query, so a Grafana `stat` panel with several queries keeps
+the first and drops the rest. Grafana draws one tile per query on such a panel, so setting this
+to `true` emits one widget per query — recovering the data, titled from each target's `alias`.
+
+Off by default because it changes layout: a five-query stat panel becomes five widgets. On
+dashboards built around the idiom (status breakdowns, wall displays) this can multiply the
+widget count several times over. Turn it on when completeness matters more than fidelity to the
+original layout.
+
+Only `stat` and `singlestat` fan out. `table` panels join their queries via a transformation,
+`piechart` queries are slices of one chart, and `bargauge` queries are buckets of one
+distribution — for those, one widget per query would be wrong.
+
+### Pre-upload validation with the `cx` CLI
+
+If the [`cx` CLI](https://github.com/coralogix/cx) is on `PATH`, every converted dashboard is
+validated against the live Coralogix API **before** it is uploaded, using the read-only
+`dashboards check` endpoint. A dashboard the API would reject is failed with the reason in the
+migration report, instead of being sent and refused. Warnings are logged and do not block.
+
+This is entirely optional — if `cx` is not installed the step is skipped and migration behaves
+exactly as before.
+
+Credentials come from the migration's own `CX_API_KEY` and region. If your account
+authenticates via OAuth rather than an API key, set `migration.cxCliProfile` to a configured
+`cx` profile name and that is used instead.
+
+To validate converted files by hand:
+
+```bash
+CX_API_KEY=cxtp_xxx CX_REGION=EU1 cx dashboards check --from-file ./converted/dashboard.json
+```
+
 `migration.multiLuceneMerge.allowlistedWidgetTypes` optionally allowlists widget types for incremental multi-query Lucene merge rollout. Example widget types: `piechart`, `timeseries`, `barchart`.
 
 ---

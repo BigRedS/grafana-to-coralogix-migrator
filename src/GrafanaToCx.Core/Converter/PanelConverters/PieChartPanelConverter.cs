@@ -37,9 +37,16 @@ public sealed class PieChartPanelConverter : IPanelConverter
         }
         else
         {
-            pieQuery = IsElasticsearchTarget(target)
+            var built = IsElasticsearchTarget(target)
                 ? BuildLogsQuery(target)
                 : BuildMetricsQuery(panel, target, discoveredMetrics);
+
+            // An ungrouped metrics query cannot make a pie chart; let the converter skip the
+            // panel and report it rather than emitting something the API will reject.
+            if (built is null)
+                return null;
+
+            pieQuery = built;
         }
 
         return new JObject
@@ -107,7 +114,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
         return new JObject { ["logs"] = logsQuery };
     }
 
-    private static JObject BuildMetricsQuery(JObject panel, JObject target, ISet<string> discoveredMetrics)
+    private static JObject? BuildMetricsQuery(JObject panel, JObject target, ISet<string> discoveredMetrics)
     {
         var expr = target.Value<string>("expr") ?? string.Empty;
         var promql = QueryHelpers.CleanQuery(expr, discoveredMetrics);
@@ -121,13 +128,51 @@ public sealed class PieChartPanelConverter : IPanelConverter
             ["filters"] = new JArray()
         };
 
+        // Coralogix rejects a metrics pie chart with empty group_names, so fall back to the
+        // PromQL grouping clause when the legend format does not name a label.
+        var groupNames = new JArray();
         if (!string.IsNullOrWhiteSpace(groupName))
-            metricsQuery["groupNames"] = new JArray(groupName);
+            groupNames.Add(groupName);
+        else
+            foreach (var label in ExtractPromqlGroupingLabels(promql))
+                groupNames.Add(label);
+
+        // No grouping anywhere means a single scalar — one slice, which Coralogix rejects
+        // outright. Signal that upward rather than emitting a widget that fails validation
+        // and takes the whole dashboard down with it.
+        if (groupNames.Count == 0)
+            return null;
+
+        metricsQuery["groupNames"] = groupNames;
 
         return new JObject
         {
             ["metrics"] = metricsQuery
         };
+    }
+
+    /// <summary>
+    /// Labels from a PromQL grouping clause — both <c>sum(...) by (a, b)</c> and
+    /// <c>sum by (a, b) (...)</c>. <c>without</c> is not usable here: it names the labels to
+    /// drop rather than the ones to group by.
+    /// </summary>
+    public static IReadOnlyList<string> ExtractPromqlGroupingLabels(string promql)
+    {
+        if (string.IsNullOrWhiteSpace(promql))
+            return [];
+
+        var match = System.Text.RegularExpressions.Regex.Match(
+            promql,
+            @"\bby\s*\(\s*(?<labels>[^)]*?)\s*\)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        if (!match.Success)
+            return [];
+
+        return match.Groups["labels"].Value
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(label => label.Length > 0)
+            .ToList();
     }
 
     private static string? InferMetricsGroupNameFromDisplayName(JObject panel)
