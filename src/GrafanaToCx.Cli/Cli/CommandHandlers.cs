@@ -198,6 +198,150 @@ public sealed class CommandHandlers
         return 1;
     }
 
+    // ── Backup ───────────────────────────────────────────────────────────────
+
+    private const string DefaultBackupFile = "grafana-backup.zip";
+
+    /// <summary>
+    /// Downloads Grafana dashboards into a local ZIP and stops there — no conversion,
+    /// no Coralogix connection. This is the backup half of <c>migrate</c> on its own.
+    /// </summary>
+    public async Task<int> RunBackupAsync(string settingsFile, string? output, string? regionOverride, bool interactive)
+    {
+        MigrationSettings settings;
+
+        if (File.Exists(settingsFile))
+        {
+            var configuration = new ConfigurationBuilder()
+                .AddJsonFile(Path.GetFullPath(settingsFile), optional: false)
+                .Build();
+            settings = configuration.Get<MigrationSettings>() ?? new MigrationSettings();
+        }
+        else if (!string.IsNullOrWhiteSpace(regionOverride))
+        {
+            // --region makes the settings file optional: everything else backup needs has a default.
+            Console.WriteLine($"Settings file '{settingsFile}' not found — using defaults with region '{regionOverride}'.");
+            settings = new MigrationSettings();
+        }
+        else
+        {
+            Console.Error.WriteLine($"Error: settings file '{settingsFile}' not found. Pass --settings <path> or --region <code>.");
+            return 1;
+        }
+
+        var region = string.IsNullOrWhiteSpace(regionOverride) ? settings.Grafana.Region : regionOverride;
+
+        string grafanaEndpoint;
+        try
+        {
+            grafanaEndpoint = RegionMapper.ResolveGrafana(region);
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            return 1;
+        }
+
+        var grafanaApiKey = Environment.GetEnvironmentVariable("GRAFANA_API_KEY");
+        if (string.IsNullOrWhiteSpace(grafanaApiKey))
+            grafanaApiKey = settings.Credentials.GrafanaApiKey;
+        if (string.IsNullOrWhiteSpace(grafanaApiKey))
+        {
+            Console.Error.WriteLine("Error: Grafana API key is required. Set GRAFANA_API_KEY or provide credentials.grafanaApiKey in settings.");
+            return 1;
+        }
+
+        var backupFile = !string.IsNullOrWhiteSpace(output)
+            ? output
+            : !string.IsNullOrWhiteSpace(settings.Migration.BackupFile)
+                ? settings.Migration.BackupFile
+                : DefaultBackupFile;
+
+        using var grafanaClient = new GrafanaClient(
+            _loggerFactory.CreateLogger<GrafanaClient>(),
+            grafanaEndpoint,
+            grafanaApiKey);
+
+        Console.WriteLine($"Fetching folders from {grafanaEndpoint} ...");
+
+        // In interactive mode the on-screen picker is the filter, so ask for every folder.
+        var folderFilter = interactive ? Array.Empty<string>() : (IReadOnlyList<string>)settings.Grafana.Folders;
+
+        List<GrafanaFolder> folders;
+        try
+        {
+            folders = await grafanaClient.GetFoldersAsync(folderFilter);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A rejected key can come back as a 2xx non-JSON body, which the client parses eagerly.
+            Console.Error.WriteLine($"Error: could not read folders from Grafana — {ex.Message}");
+            Console.Error.WriteLine("Check that GRAFANA_API_KEY is valid for this region.");
+            return 1;
+        }
+
+        if (folders.Count == 0)
+        {
+            Console.Error.WriteLine("No Grafana folders found (check the API key, region, and grafana.folders filter).");
+            return 1;
+        }
+
+        if (interactive)
+        {
+            var selected = MultiSelectWithFallback.SelectRequired(
+                "Select folders to back up",
+                folders,
+                f => f.Title);
+
+            if (selected.Count == 0)
+            {
+                Console.Error.WriteLine("No folders selected.");
+                return 1;
+            }
+
+            folders = selected.ToList();
+        }
+
+        Console.WriteLine($"Backing up {folders.Count} folder(s) to '{backupFile}' ...");
+
+        var backupService = new GrafanaDashboardBackupService(
+            grafanaClient,
+            _loggerFactory.CreateLogger<GrafanaDashboardBackupService>());
+
+        GrafanaDashboardBackupResult result;
+        try
+        {
+            result = await backupService.BackupAsync(folders, backupFile);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Console.Error.WriteLine($"Error: backup failed — {ex.Message}");
+            return 1;
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("══ Backup Summary ═════════════════════════");
+        Console.WriteLine($"  Archive               : {Path.GetFullPath(backupFile)}");
+        Console.WriteLine($"  Folders               : {folders.Count}");
+        Console.WriteLine($"  Dashboards saved      : {result.SavedDashboards}/{result.TotalDashboards}");
+
+        if (result.FailedFolders.Count > 0)
+            Console.WriteLine($"  Folders skipped       : {string.Join(", ", result.FailedFolders)}");
+        if (result.FailedDashboards.Count > 0)
+            Console.WriteLine($"  Dashboards skipped    : {string.Join(", ", result.FailedDashboards)}");
+
+        if (!result.Success)
+        {
+            Console.Error.WriteLine("Backup incomplete — see _manifest.json inside the archive.");
+            return 1;
+        }
+
+        if (result.TotalDashboards == 0)
+            Console.WriteLine("  Note                  : selected folders contain no dashboards.");
+
+        return 0;
+    }
+
     // ── Migrate ──────────────────────────────────────────────────────────────
 
     public async Task<int> RunMigrateAsync(string settingsFile, bool interactive)
@@ -561,11 +705,14 @@ public sealed class CommandHandlers
                 case "6":
                     await RunCleanupFoldersMenuAsync(config);
                     break;
+                case "7":
+                    await RunBackupMenuAsync(settingsFile);
+                    break;
                 case "0":
                     Console.WriteLine("Goodbye.");
                     return 0;
                 default:
-                    Console.Error.WriteLine($"Unknown option '{selected.Key}'. Enter 0–6.");
+                    Console.Error.WriteLine($"Unknown option '{selected.Key}'. Enter 0–7.");
                     break;
             }
         }
@@ -610,6 +757,37 @@ public sealed class CommandHandlers
 
         settingsFile = Prompt.Input<string>("Settings file", defaultValue: settingsFile);
         await ExecuteMigrationAsync(settingsFile, grafanaKey, config.CxApiKey, promptInteractive: true);
+    }
+
+    private async Task RunBackupMenuAsync(string settingsFile)
+    {
+        var grafanaKey = Environment.GetEnvironmentVariable("GRAFANA_API_KEY");
+        if (string.IsNullOrEmpty(grafanaKey))
+        {
+            grafanaKey = Prompt.Password("Grafana API key", validators: [Validators.Required()]);
+            if (string.IsNullOrEmpty(grafanaKey))
+            {
+                Console.Error.WriteLine("Grafana API key is required.");
+                return;
+            }
+
+            // RunBackupAsync reads the key from the environment or the settings file, so hand
+            // the prompted value over the same way the rest of the session does.
+            Environment.SetEnvironmentVariable("GRAFANA_API_KEY", grafanaKey);
+        }
+        else
+        {
+            Console.WriteLine("Using GRAFANA_API_KEY from environment.");
+        }
+
+        settingsFile = Prompt.Input<string>("Settings file", defaultValue: settingsFile);
+        var output = Prompt.Input<string>("Output ZIP (Enter = use settings)", defaultValue: string.Empty);
+
+        await RunBackupAsync(
+            settingsFile,
+            string.IsNullOrWhiteSpace(output) ? null : output,
+            regionOverride: null,
+            interactive: true);
     }
 
     private async Task RunCleanupFoldersMenuAsync(SessionConfig config)

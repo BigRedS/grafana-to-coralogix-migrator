@@ -6,6 +6,7 @@ It supports:
 - Single-file conversion (`convert`)
 - Single-file conversion + upload (`push`)
 - Bulk migration from live Grafana (`migrate`)
+- Download-only backup of live Grafana dashboards (`backup`)
 - Bulk import from local files (`import`)
 - Conversion + round-trip validation (`verify`)
 
@@ -134,16 +135,21 @@ Enter your Coralogix region and API key. If `CX_API_KEY` is already exported, th
 ║  Grafana → Coralogix Dashboard Converter ║
 ╚══════════════════════════════════════════╝
 
-> Migrate   ← select this
-  Convert
-  Push
-  Import
-  Settings
-  Cleanup
-  Exit
+  1. Convert – Grafana JSON → CX JSON (local)
+  2. Push – Push single dashboard to Coralogix
+  3. Import – Import folder of dashboards
+> 4. Migrate – Bulk migrate from Grafana   ← select this
+  5. Settings – Change connection settings
+  6. Cleanup – Backup and delete dashboards by folder
+  7. Backup – Download Grafana dashboards to a local ZIP
+  0. Exit
 ```
 
 Use arrow keys to highlight **Migrate** and press Enter.
+
+Option **7 (Backup)** downloads dashboards from Grafana without converting or uploading anything —
+see [`backup`](#backup). Note that the interactive session asks for a Coralogix region and key up
+front regardless of which option you pick; run `backup` as a direct command to skip that.
 
 **c) Grafana API key**
 
@@ -359,8 +365,7 @@ Full settings file with all available fields:
   "migration": {
     "checkpointFile": "migration-checkpoint.json",
     "reportFile": "migration-report.txt",
-    "fanOutMultiQueryPanels": false,
-    "cxCliProfile": "",
+    "backupFile": "grafana-backup.zip",
     "maxRetries": 5,
     "initialRetryDelaySeconds": 2
   }
@@ -380,8 +385,7 @@ Full settings file with all available fields:
 | `credentials.cxApiKey` | Optional fallback when `CX_API_KEY` is not set |
 | `migration.checkpointFile` | Checkpoint file path for resume |
 | `migration.reportFile` | Human-readable migration report path |
-| `migration.fanOutMultiQueryPanels` | Emit one widget per query for multi-query `stat` panels instead of keeping the first (default `false` — see below) |
-| `migration.cxCliProfile` | cx CLI profile for pre-upload validation; leave empty to use the migration's own API key (see below) |
+| `migration.backupFile` | Grafana backup ZIP path, used by `backup` and by `migrate`'s pre-flight backup. Empty disables the pre-flight backup; `backup` then falls back to `grafana-backup.zip` |
 | `migration.maxRetries` | Max retries per dashboard |
 | `migration.initialRetryDelaySeconds` | Initial exponential backoff delay |
 
@@ -439,8 +443,10 @@ CX_API_KEY=cxtp_xxx CX_REGION=EU1 cx dashboards check --from-file ./converted/da
 
 | Variable | Used by | Notes |
 |---|---|---|
-| `GRAFANA_API_KEY` | `migrate` | First priority for Grafana API key (falls back to `credentials.grafanaApiKey`) |
+| `GRAFANA_API_KEY` | `migrate`, `backup` | First priority for Grafana API key (falls back to `credentials.grafanaApiKey`) |
 | `CX_API_KEY` | `migrate`, `verify` | First priority for Coralogix API key (falls back to `credentials.cxApiKey`) |
+
+`backup` never contacts Coralogix, so it does not need `CX_API_KEY`.
 
 `push` and `import` get the API key from the interactive session.
 
@@ -483,6 +489,47 @@ dotnet run --project ./src/GrafanaToCx.Cli/GrafanaToCx.Cli.csproj -- migrate --s
 API key precedence for non-interactive `migrate`:
 1. `GRAFANA_API_KEY` / `CX_API_KEY` environment variables
 2. `credentials.grafanaApiKey` / `credentials.cxApiKey` in the settings file
+
+### `backup`
+
+Download Grafana dashboards into a local ZIP and stop there — no conversion, no upload, no
+Coralogix connection. This is the backup step that `migrate` performs first, available on its own:
+
+```bash
+export GRAFANA_API_KEY=glsa_xxxxxxxxxxxx
+dotnet run --project ./src/GrafanaToCx.Cli/GrafanaToCx.Cli.csproj -- backup --settings migration-settings.json
+```
+
+| Flag | Description |
+|---|---|
+| `-s`, `--settings` | Path to migration settings JSON (default: `migration-settings.json`) |
+| `-o`, `--output` | Output ZIP path (default: `migration.backupFile`, else `grafana-backup.zip`) |
+| `-r`, `--region` | Grafana region override; also makes the settings file optional |
+| `-I`, `--interactive` | Pick folders from a list instead of using `grafana.folders` |
+
+Archive layout matches the `migrate` backup — one JSON per dashboard, grouped by Grafana folder:
+
+```
+Technical_Platform-Ops/Gateway Integra Cluster_jDN4i4T4zdsfr.json
+Technical_Platform-Ops/Stephan_Monitoring_FE_e6e17d7d-....json
+```
+
+Folder scope comes from `grafana.folders` in the settings file (empty = all folders), or from the
+picker when `--interactive` is passed. With `--region` you can skip the settings file entirely:
+
+```bash
+dotnet run --project ./src/GrafanaToCx.Cli/GrafanaToCx.Cli.csproj -- backup --region eu1 -o ./boards.zip -I
+```
+
+Exit code is `0` only when every discovered dashboard was written. If anything was skipped the
+command exits `1` and the archive carries a `_manifest.json` listing what failed.
+
+To unpack a backup for local work, then convert it without uploading:
+
+```bash
+unzip -d ./grafana-dashboards ./grafana-backup.zip
+dotnet run --project ./src/GrafanaToCx.Cli/GrafanaToCx.Cli.csproj -- convert ./grafana-dashboards -o ./converted
+```
 
 ### `push`
 
