@@ -19,6 +19,7 @@ public static class ArgumentParser
             "convert" => ParseConvert(rest),
             "migrate" => ParseMigrate(rest),
             "assess" => ParseAssess(rest),
+            "backup" => ParseBackup(rest),
             "verify" => ParseVerify(rest),
             "import" => ParseImport(rest),
             _ => new ParsedArgs(CommandKind.Interactive, new Dictionary<string, string?>())
@@ -129,6 +130,56 @@ public static class ArgumentParser
         return new ParsedArgs(CommandKind.Assess, dict);
     }
 
+    private static ParsedArgs ParseBackup(ReadOnlySpan<string> rest)
+    {
+        string? settings = "migration-settings.json";
+        string? output = null;
+        string? region = null;
+        var interactive = false;
+
+        for (var i = 0; i < rest.Length; i++)
+        {
+            var arg = rest[i];
+            if (arg is "-s" or "--settings")
+            {
+                if (i + 1 < rest.Length)
+                {
+                    settings = rest[i + 1];
+                    i++;
+                }
+            }
+            else if (arg is "-o" or "--output")
+            {
+                if (i + 1 < rest.Length)
+                {
+                    output = rest[i + 1];
+                    i++;
+                }
+            }
+            else if (arg is "-r" or "--region")
+            {
+                if (i + 1 < rest.Length)
+                {
+                    region = rest[i + 1];
+                    i++;
+                }
+            }
+            else if (arg is "-I" or "--interactive")
+            {
+                interactive = true;
+            }
+        }
+
+        var dict = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["settings"] = settings,
+            ["output"] = output,
+            ["region"] = region,
+            ["interactive"] = interactive ? "true" : "false"
+        };
+        return new ParsedArgs(CommandKind.Backup, dict);
+    }
+
     private static ParsedArgs ParseVerify(ReadOnlySpan<string> rest)
     {
         string? input = null;
@@ -206,6 +257,7 @@ public enum CommandKind
     Convert,
     Migrate,
     Assess,
+    Backup,
     Verify,
     Import
 }
