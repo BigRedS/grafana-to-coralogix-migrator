@@ -241,7 +241,10 @@ public static class AppRunner
             settings,
             parsed.Get("output"),
             parsed.Get("region"),
-            parsed.GetBool("interactive"));
+            parsed.GetBool("interactive"),
+            parsed.Get("grafana-url"),
+            parsed.GetBool("tls-skip-verify"),
+            parsed.GetBool("anonymous"));
     }
 
     private static async Task<int> RunVerifyFromArgs(CommandHandlers handlers, ParsedArgs parsed)

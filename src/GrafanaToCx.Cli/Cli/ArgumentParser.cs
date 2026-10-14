@@ -135,7 +135,10 @@ public static class ArgumentParser
         string? settings = "migration-settings.json";
         string? output = null;
         string? region = null;
+        string? grafanaUrl = null;
         var interactive = false;
+        var tlsSkipVerify = false;
+        var anonymous = false;
 
         for (var i = 0; i < rest.Length; i++)
         {
@@ -164,9 +167,25 @@ public static class ArgumentParser
                     i++;
                 }
             }
+            else if (arg is "--grafana-url")
+            {
+                if (i + 1 < rest.Length)
+                {
+                    grafanaUrl = rest[i + 1];
+                    i++;
+                }
+            }
             else if (arg is "-I" or "--interactive")
             {
                 interactive = true;
+            }
+            else if (arg is "--tls-skip-verify")
+            {
+                tlsSkipVerify = true;
+            }
+            else if (arg is "--anonymous")
+            {
+                anonymous = true;
             }
         }
 
@@ -175,6 +194,9 @@ public static class ArgumentParser
             ["settings"] = settings,
             ["output"] = output,
             ["region"] = region,
+            ["grafana-url"] = grafanaUrl,
+            ["tls-skip-verify"] = tlsSkipVerify ? "true" : "false",
+            ["anonymous"] = anonymous ? "true" : "false",
             ["interactive"] = interactive ? "true" : "false"
         };
         return new ParsedArgs(CommandKind.Backup, dict);
