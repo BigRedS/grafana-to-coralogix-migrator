@@ -493,6 +493,31 @@ API key precedence for non-interactive `migrate`:
 1. `GRAFANA_API_KEY` / `CX_API_KEY` environment variables
 2. `credentials.grafanaApiKey` / `credentials.cxApiKey` in the settings file
 
+### `assess`
+
+Convert a set of dashboards without uploading anything, and report which come across cleanly,
+which lose something, and which Coralogix would refuse. Takes a directory of dashboard JSON or a
+`backup` ZIP:
+
+```bash
+dotnet run --project ./src/GrafanaToCx.Cli/GrafanaToCx.Cli.csproj -- assess ./boards.zip -f markdown -o assessment.md
+```
+
+| Flag | Description |
+|---|---|
+| `-o`, `--output` | Also write the report to this file |
+| `-f`, `--format` | `text` (default) or `markdown` |
+| `-r`, `--region` / `-p`, `--profile` | Region and cx CLI profile for validating against the Coralogix API (skipped when `cx` is not installed) |
+| `--assume-queries-translated` | Judge only dashboard mechanics; see below |
+
+Panels whose queries target a datasource the converter does not translate (InfluxDB, CloudWatch,
+Graphite, ...) are reported as such. With `--assume-queries-translated` those queries, and query
+variables on those datasources, are replaced with stand-ins before conversion, as if the data were
+already in Coralogix under sensible names. What is left is the work for whoever migrates the
+dashboards: panel types with no equivalent, multi-query widgets, transformations, links, datasource
+picker variables and so on. Getting the data in and naming it is an integration problem the
+assessment then takes as solved.
+
 ### `backup`
 
 Download Grafana dashboards into a local ZIP and stop there — no conversion, no upload, no

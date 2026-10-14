@@ -231,7 +231,7 @@ public static class AppRunner
 
         return await handlers.RunAssessAsync(
             input, parsed.Get("output"), parsed.Get("profile"), parsed.Get("region"),
-            parsed.Get("format"));
+            parsed.Get("format"), parsed.GetBool("assume-queries-translated"));
     }
 
     private static async Task<int> RunBackupFromArgs(CommandHandlers handlers, ParsedArgs parsed)

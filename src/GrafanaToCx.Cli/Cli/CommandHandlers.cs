@@ -99,7 +99,8 @@ public sealed class CommandHandlers
     /// Accepts a directory of dashboard JSON or a backup .zip.
     /// </summary>
     public async Task<int> RunAssessAsync(
-        string input, string? output, string? profile, string? region, string? format = null)
+        string input, string? output, string? profile, string? region, string? format = null,
+        bool assumeQueriesTranslated = false)
     {
         if (!TryParseReportFormat(format, out var reportFormat))
         {
@@ -128,14 +129,14 @@ public sealed class CommandHandlers
         if (!checker.IsInstalled)
             Console.WriteLine("cx CLI not found — assessing conversion only, without API validation.");
 
-        var assessor = new MigrationAssessor(CreateConverter(), checker);
+        var assessor = new MigrationAssessor(CreateConverter(), checker, assumeQueriesTranslated);
         var assessments = new List<DashboardAssessment>(sources.Count);
 
         Console.WriteLine($"Assessing {sources.Count} dashboard(s)...");
         foreach (var (name, json) in sources)
             assessments.Add(await assessor.AssessAsync(name, json));
 
-        var report = AssessmentReport.Build(assessments, reportFormat);
+        var report = AssessmentReport.Build(assessments, reportFormat, assumeQueriesTranslated);
         Console.WriteLine();
         Console.WriteLine(report);
 
