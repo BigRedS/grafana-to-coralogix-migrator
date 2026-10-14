@@ -6,6 +6,18 @@ public sealed class MigrationSettings
     public CoralogixSettings Coralogix { get; init; } = new();
     public MigrationCredentialsSettings Credentials { get; init; } = new();
     public MigrationRunSettings Migration { get; init; } = new();
+
+    /// <summary>
+    /// Settings for the local-file <c>import</c> flow. Deliberately separate from <see cref="Migration"/>
+    /// so import never shares a checkpoint file with migrate.
+    /// </summary>
+    public ImportSettings Import { get; init; } = new();
+
+    /// <summary>
+    /// Settings for the <c>grafana-import</c> flow, which publishes local dashboard exports into a
+    /// Coralogix-hosted Grafana. Separate from <see cref="Import"/> so the two never share a checkpoint.
+    /// </summary>
+    public GrafanaImportSettings GrafanaImport { get; init; } = new();
 }
 
 public sealed class MigrationCredentialsSettings
@@ -76,9 +88,14 @@ public sealed class MigrationRunSettings
     /// <summary>
     /// When true, a stat panel with several queries becomes one widget per query rather than
     /// keeping the first and dropping the rest. Preserves the data; adds widgets and so changes
-    /// the layout of dashboards built around the idiom. Off by default.
+    /// the layout of dashboards built around the idiom. On by default.
     /// </summary>
-    public bool FanOutMultiQueryPanels { get; init; }
+    /// <remarks>
+    /// The initialiser is required, not decorative: this is bound from a settings file that
+    /// usually omits the key, and a bare <c>init</c> bool would then deserialize to false and
+    /// silently restore the lossy behaviour.
+    /// </remarks>
+    public bool FanOutMultiQueryPanels { get; init; } = true;
 
     /// <summary>
     /// Optional cx CLI profile used for pre-upload validation. Needed when the account
