@@ -19,6 +19,13 @@ public sealed class PieChartPanelConverter : IPanelConverter
 {
     private static readonly IAggregationMapper AggregationMapper = new AggregationMapper();
 
+    private readonly Action<PanelConversionDiagnostic>? _diagnosticSink;
+
+    public PieChartPanelConverter(Action<PanelConversionDiagnostic>? diagnosticSink = null)
+    {
+        _diagnosticSink = diagnosticSink;
+    }
+
     public JObject? Convert(JObject panel, ISet<string> discoveredMetrics, TransformationPlan? plan = null)
     {
         var targets = PanelTargetSelector.ResolveVisibleTargets(panel, plan);
@@ -39,7 +46,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
         {
             var built = IsElasticsearchTarget(target)
                 ? BuildLogsQuery(target)
-                : BuildMetricsQuery(panel, target, discoveredMetrics);
+                : BuildMetricsQuery(panel, targets, discoveredMetrics);
 
             // An ungrouped metrics query cannot make a pie chart; let the converter skip the
             // panel and report it rather than emitting something the API will reject.
@@ -52,8 +59,8 @@ public sealed class PieChartPanelConverter : IPanelConverter
         return new JObject
         {
             ["id"] = WidgetHelpers.IdObject(),
-            ["title"] = panel.Value<string>("title") is { Length: > 0 } t ? t : $"Panel #{panel.Value<int>("id")}",
-            ["description"] = QueryHelpers.CleanHtml(panel.Value<string>("description") ?? string.Empty),
+            ["title"] = WidgetHelpers.ResolveTitle(panel),
+            ["description"] = WidgetHelpers.ResolveDescription(panel),
             ["definition"] = new JObject
             {
                 ["pieChart"] = new JObject
@@ -63,7 +70,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
                     ["minSlicePercentage"] = 0,
                     ["showLegend"] = legendOptions.Value<bool?>("showLegend") ?? true,
                     ["colorScheme"] = "classic",
-                    ["unit"] = QueryHelpers.MapUnitForGauge(grafanaUnit),
+                    ["unit"] = QueryHelpers.MapUnit(grafanaUnit),
                     ["dataModeType"] = "DATA_MODE_TYPE_HIGH_UNSPECIFIED",
                     ["stackDefinition"] = new JObject
                     {
@@ -114,41 +121,74 @@ public sealed class PieChartPanelConverter : IPanelConverter
         return new JObject { ["logs"] = logsQuery };
     }
 
-    private static JObject? BuildMetricsQuery(JObject panel, JObject target, ISet<string> discoveredMetrics)
+    private JObject? BuildMetricsQuery(JObject panel, IReadOnlyList<JObject> targets, ISet<string> discoveredMetrics)
     {
-        var expr = target.Value<string>("expr") ?? string.Empty;
-        var promql = QueryHelpers.CleanQuery(expr, discoveredMetrics);
-        var groupName = InferMetricsGroupNameFromDisplayName(panel);
+        var series = targets
+            .Select(t => new PromqlSeriesTarget(
+                QueryHelpers.CleanQuery(t.Value<string>("expr") ?? string.Empty, discoveredMetrics),
+                t.Value<string>("legendFormat")))
+            .Where(t => !string.IsNullOrWhiteSpace(t.Expr))
+            .ToList();
 
+        var groupNames = ResolveGroupNames(panel, series);
+
+        if (groupNames.Count > 0)
+            return BuildMetricsQueryObject(series[0].Expr, groupNames);
+
+        // No label to slice by. Stamp one on with label_replace so each original query becomes a slice,
+        // rather than dropping every target but the first and emitting an unusable empty grouping.
+        var consolidated = PromqlSeriesConsolidator.Consolidate(series);
+
+        // Nothing usable to chart. Coralogix rejects a metrics pie with empty group_names, so signal
+        // upward and let the caller skip the panel rather than emit a widget that fails validation.
+        if (consolidated is null)
+            return null;
+
+        ReportConsolidation(panel, consolidated);
+        return BuildMetricsQueryObject(consolidated.Expr, [consolidated.GroupLabel]);
+    }
+
+    /// <summary>
+    /// Grouping labels, in descending order of how directly they express intent:
+    /// the PromQL <c>by (...)</c> clause, then <c>{{label}}</c> legend references, then the
+    /// <c>${__field.labels.X}</c> display-name template.
+    /// </summary>
+    private static List<string> ResolveGroupNames(JObject panel, IReadOnlyList<PromqlSeriesTarget> series)
+    {
+        var fromByClause = series
+            .SelectMany(s => PromqlGroupNameExtractor.FromByClause(s.Expr))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (fromByClause.Count > 0)
+            return fromByClause;
+
+        var fromLegend = series
+            .SelectMany(s => PromqlGroupNameExtractor.FromLegendFormat(s.Label))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (fromLegend.Count > 0)
+            return fromLegend;
+
+        var fromDisplayName = PromqlGroupNameExtractor.FromDisplayName(
+            panel["fieldConfig"]?["defaults"]?["displayName"]?.ToString());
+
+        return fromDisplayName is null ? [] : [fromDisplayName];
+    }
+
+    private static JObject BuildMetricsQueryObject(string promql, IReadOnlyList<string> groupNames)
+    {
         var metricsQuery = new JObject
         {
             ["promqlQuery"] = new JObject { ["value"] = promql },
             ["aggregation"] = "AGGREGATION_LAST",
             ["editorMode"] = "METRICS_QUERY_EDITOR_MODE_TEXT",
-            ["filters"] = new JArray()
+            ["filters"] = new JArray(),
+            ["groupNames"] = new JArray(groupNames)
         };
 
-        // Coralogix rejects a metrics pie chart with empty group_names, so fall back to the
-        // PromQL grouping clause when the legend format does not name a label.
-        var groupNames = new JArray();
-        if (!string.IsNullOrWhiteSpace(groupName))
-            groupNames.Add(groupName);
-        else
-            foreach (var label in ExtractPromqlGroupingLabels(promql))
-                groupNames.Add(label);
-
-        // No grouping anywhere means a single scalar — one slice, which Coralogix rejects
-        // outright. Signal that upward rather than emitting a widget that fails validation
-        // and takes the whole dashboard down with it.
-        if (groupNames.Count == 0)
-            return null;
-
-        metricsQuery["groupNames"] = groupNames;
-
-        return new JObject
-        {
-            ["metrics"] = metricsQuery
-        };
+        return new JObject { ["metrics"] = metricsQuery };
     }
 
     /// <summary>
@@ -175,26 +215,30 @@ public sealed class PieChartPanelConverter : IPanelConverter
             .ToList();
     }
 
-    private static string? InferMetricsGroupNameFromDisplayName(JObject panel)
+    /// <summary>
+    /// Reports that several queries were merged under a synthesized label. Only worth reporting when
+    /// more than one query was folded together; a single query keeps its original meaning.
+    /// </summary>
+    private void ReportConsolidation(JObject panel, PromqlConsolidationResult consolidated)
     {
-        const string labelPrefix = "${__field.labels.";
-        const string suffix = "}";
+        if (_diagnosticSink is null || consolidated.SeriesCount < 2)
+            return;
 
-        var displayName = panel["fieldConfig"]?["defaults"]?["displayName"]?.ToString();
-        if (string.IsNullOrWhiteSpace(displayName))
-            return null;
-
-        if (!displayName.StartsWith(labelPrefix, StringComparison.Ordinal) ||
-            !displayName.EndsWith(suffix, StringComparison.Ordinal))
-            return null;
-
-        var label = displayName[labelPrefix.Length..^suffix.Length].Trim();
-        return string.IsNullOrWhiteSpace(label) ? null : label;
+        _diagnosticSink(new PanelConversionDiagnostic(
+            panel.Value<string>("title") ?? string.Empty,
+            "piechart",
+            "approximated",
+            $"Panel had no group-by label; {consolidated.SeriesCount} queries were merged into one and " +
+            $"grouped by a synthesized '{consolidated.GroupLabel}' label taken from each query's legend.",
+            "DGR-PIE-010",
+            [],
+            "promql-label-replace-consolidation",
+            0.9));
     }
 
     private static bool IsElasticsearchTarget(JObject target)
     {
-        var dsType = target["datasource"]?["type"]?.ToString();
+        var dsType = QueryHelpers.DatasourceType(target);
         if (dsType?.Equals("elasticsearch", StringComparison.OrdinalIgnoreCase) == true ||
             dsType?.Equals("opensearch", StringComparison.OrdinalIgnoreCase) == true)
             return true;
@@ -224,7 +268,7 @@ public sealed class PieChartPanelConverter : IPanelConverter
             },
             ["filters"] = new JArray()
         };
-        
+
         // PieChart.query uses oneof semantics in API contract; keep only dataprime.
         return new JObject
         {
